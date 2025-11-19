@@ -1866,7 +1866,7 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 						EgressIPs: []string{egressIP},
 					},
 				}
-				assignedStatuses := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.HaveLen(1))
 				gomega.Expect(assignedStatuses[0].Node).To(gomega.Equal(egressNode2.name))
 				gomega.Expect(assignedStatuses[0].EgressIP).To(gomega.Equal(net.ParseIP(egressIP).String()))
@@ -1948,7 +1948,7 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode1.name] = &egressNode1
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode2.name] = &egressNode2
 
-				assignedStatuses := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.HaveLen(2))
 				gomega.Expect(assignedStatuses[0].Node).To(gomega.Equal(egressNode2.name))
 				gomega.Expect(assignedStatuses[0].EgressIP).To(gomega.Equal(net.ParseIP(egressIP1).String()))
@@ -2035,7 +2035,7 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 
 				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node1)).To(gomega.Succeed())
 				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node2)).To(gomega.Succeed())
-				assignedStatuses := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.HaveLen(2))
 				gomega.Expect(assignedStatuses[0].Node).To(gomega.Equal(egressNode2.name))
 				gomega.Expect(assignedStatuses[0].EgressIP).To(gomega.Equal(net.ParseIP(egressIP1).String()))
@@ -2129,7 +2129,7 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 
 				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node1)).To(gomega.Succeed())
 				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node2)).To(gomega.Succeed())
-				assignedStatuses := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.HaveLen(2))
 				gomega.Expect(assignedStatuses[0].Node).To(gomega.Equal(egressNode2.name))
 				gomega.Expect(assignedStatuses[0].EgressIP).To(gomega.Equal(net.ParseIP(egressIP1SecondaryHost).String()))
@@ -2215,10 +2215,10 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 
 				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node1)).To(gomega.Succeed())
 				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node2)).To(gomega.Succeed())
-				assignedStatuses := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.HaveLen(1))
 				gomega.Expect(assignedStatuses[0].Node).To(gomega.Equal(node2Name))
-				assignedStatuses = fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ = fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.HaveLen(1))
 				gomega.Expect(assignedStatuses[0].Node).To(gomega.Equal(node2Name))
 				return nil
@@ -2300,7 +2300,7 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode1.name] = &egressNode1
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode2.name] = &egressNode2
 
-				assignedStatuses := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.BeEmpty())
 
 				return nil
@@ -2383,7 +2383,7 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 
 				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node1)).To(gomega.Succeed())
 				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node2)).To(gomega.Succeed())
-				assignedStatuses := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.BeEmpty())
 
 				return nil
@@ -2462,7 +2462,7 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode1.name] = &egressNode1
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode2.name] = &egressNode2
 
-				assignedStatuses := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.BeEmpty())
 				return nil
 			}
@@ -2541,7 +2541,7 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode1.name] = &egressNode1
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode2.name] = &egressNode2
 
-				assignedStatuses := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.BeEmpty())
 				return nil
 			}
@@ -2620,7 +2620,7 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode1.name] = &egressNode1
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode2.name] = &egressNode2
 
-				assignedStatuses := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.HaveLen(1))
 				gomega.Expect(assignedStatuses[0].Node).To(gomega.Equal(egressNode2.name))
 				gomega.Expect(assignedStatuses[0].EgressIP).To(gomega.Equal(net.ParseIP(egressIP).String()))
@@ -2701,7 +2701,7 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode1.name] = &egressNode1
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode2.name] = &egressNode2
 
-				assignedStatuses := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.BeEmpty())
 				return nil
 			}
@@ -2857,7 +2857,7 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode1.name] = &egressNode1
 				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode2.name] = &egressNode2
 
-				assignedStatuses := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				assignedStatuses, _ := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
 				gomega.Expect(assignedStatuses).To(gomega.HaveLen(1))
 				gomega.Expect(assignedStatuses[0].Node).To(gomega.Equal(egressNode2.name))
 				gomega.Expect(assignedStatuses[0].EgressIP).To(gomega.Equal(net.ParseIP(egressIP).String()))
@@ -4444,6 +4444,380 @@ var _ = ginkgo.Describe("OVN cluster-manager EgressIP Operations", func() {
 				gomega.Expect(mark).Should(gomega.BeNumerically(">=", eipMarkMin), "mark should be greater or equal to allowable min")
 				ecc.deallocMark(egressIPName)
 			}
+		})
+	})
+
+	ginkgo.Context("EgressIP Mark Assignment Logic", func() {
+		ginkgo.It("should return OVN assignment flag for primary network assignments", func() {
+			app.Action = func(ctx *cli.Context) error {
+				node1Name := "node1"
+				node2Name := "node2"
+				node1IPv4 := "192.168.126.41/24"
+				node2IPv4 := "192.168.126.51/24"
+				egressIP := "192.168.126.102"
+
+				node1 := corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: node1Name,
+						Annotations: map[string]string{
+							"k8s.ovn.org/node-primary-ifaddr": fmt.Sprintf("{\"ipv4\": \"%s\", \"ipv6\": \"%s\"}", node1IPv4, ""),
+							"k8s.ovn.org/node-subnets":        fmt.Sprintf("{\"default\": [\"%s\"]}", "192.168.126.0/24"),
+							util.OVNNodeHostCIDRs:             fmt.Sprintf("[\"%s\"]", node1IPv4),
+						},
+						Labels: map[string]string{
+							"k8s.ovn.org/egress-assignable": "",
+						},
+					},
+					Status: corev1.NodeStatus{
+						Conditions: []corev1.NodeCondition{
+							{
+								Type:   corev1.NodeReady,
+								Status: corev1.ConditionTrue,
+							},
+						},
+					},
+				}
+
+				node2 := corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: node2Name,
+						Annotations: map[string]string{
+							"k8s.ovn.org/node-primary-ifaddr": fmt.Sprintf("{\"ipv4\": \"%s\", \"ipv6\": \"%s\"}", node2IPv4, ""),
+							"k8s.ovn.org/node-subnets":        fmt.Sprintf("{\"default\": [\"%s\"]}", "192.168.126.0/24"),
+							util.OVNNodeHostCIDRs:             fmt.Sprintf("[\"%s\"]", node2IPv4),
+						},
+						Labels: map[string]string{
+							"k8s.ovn.org/egress-assignable": "",
+						},
+					},
+					Status: corev1.NodeStatus{
+						Conditions: []corev1.NodeCondition{
+							{
+								Type:   corev1.NodeReady,
+								Status: corev1.ConditionTrue,
+							},
+						},
+					},
+				}
+
+				egressNode1 := setupNode(node1Name, []string{"192.168.126.41/24"}, map[string]string{})
+				egressNode2 := setupNode(node2Name, []string{"192.168.126.51/24"}, map[string]string{})
+
+				eIP := egressipv1.EgressIP{
+					ObjectMeta: newEgressIPMeta(egressIPName),
+					Spec: egressipv1.EgressIPSpec{
+						EgressIPs: []string{egressIP},
+					},
+				}
+
+				fakeClusterManagerOVN.start(
+					&corev1.NodeList{Items: []corev1.Node{node1, node2}},
+					&egressipv1.EgressIPList{Items: []egressipv1.EgressIP{eIP}},
+				)
+
+				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode1.name] = &egressNode1
+				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode2.name] = &egressNode2
+
+				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node1)).To(gomega.Succeed())
+				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node2)).To(gomega.Succeed())
+
+				assignedStatuses, hasOVNAssignment := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				gomega.Expect(assignedStatuses).To(gomega.HaveLen(1))
+				gomega.Expect(assignedStatuses[0].Node).To(gomega.Equal(egressNode2.name))
+				gomega.Expect(assignedStatuses[0].EgressIP).To(gomega.Equal(net.ParseIP(egressIP).String()))
+				gomega.Expect(hasOVNAssignment).To(gomega.BeTrue())
+
+				return nil
+			}
+			err := app.Run([]string{app.Name})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		})
+
+		ginkgo.It("should return OVN assignment flag for secondary host network assignments", func() {
+			app.Action = func(ctx *cli.Context) error {
+				node1Name := "node1"
+				node2Name := "node2"
+				node1IPv4 := "192.168.126.41/24"
+				node2IPv4 := "192.168.126.51/24"
+				egressIP := "192.168.127.102" // IP on secondary network
+
+				node1 := corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: node1Name,
+						Annotations: map[string]string{
+							"k8s.ovn.org/node-primary-ifaddr": fmt.Sprintf("{\"ipv4\": \"%s\", \"ipv6\": \"%s\"}", node1IPv4, ""),
+							"k8s.ovn.org/node-subnets":        fmt.Sprintf("{\"default\": [\"%s\"]}", "192.168.126.0/24"),
+							util.OVNNodeHostCIDRs:             fmt.Sprintf("[\"%s\", \"%s\"]", node1IPv4, "192.168.127.41/24"),
+						},
+						Labels: map[string]string{
+							"k8s.ovn.org/egress-assignable": "",
+						},
+					},
+					Status: corev1.NodeStatus{
+						Conditions: []corev1.NodeCondition{
+							{
+								Type:   corev1.NodeReady,
+								Status: corev1.ConditionTrue,
+							},
+						},
+					},
+				}
+
+				node2 := corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: node2Name,
+						Annotations: map[string]string{
+							"k8s.ovn.org/node-primary-ifaddr": fmt.Sprintf("{\"ipv4\": \"%s\", \"ipv6\": \"%s\"}", node2IPv4, ""),
+							"k8s.ovn.org/node-subnets":        fmt.Sprintf("{\"default\": [\"%s\"]}", "192.168.126.0/24"),
+							util.OVNNodeHostCIDRs:             fmt.Sprintf("[\"%s\"]", node2IPv4),
+						},
+						Labels: map[string]string{
+							"k8s.ovn.org/egress-assignable": "",
+						},
+					},
+					Status: corev1.NodeStatus{
+						Conditions: []corev1.NodeCondition{
+							{
+								Type:   corev1.NodeReady,
+								Status: corev1.ConditionTrue,
+							},
+						},
+					},
+				}
+
+				egressNode1 := setupNode(node1Name, []string{"192.168.126.41/24"}, map[string]string{"192.168.127.102": "eth1"})
+				egressNode2 := setupNode(node2Name, []string{"192.168.126.51/24"}, map[string]string{})
+
+				eIP := egressipv1.EgressIP{
+					ObjectMeta: newEgressIPMeta(egressIPName),
+					Spec: egressipv1.EgressIPSpec{
+						EgressIPs: []string{egressIP},
+					},
+				}
+
+				fakeClusterManagerOVN.start(
+					&corev1.NodeList{Items: []corev1.Node{node1, node2}},
+					&egressipv1.EgressIPList{Items: []egressipv1.EgressIP{eIP}},
+				)
+
+				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode1.name] = &egressNode1
+				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode2.name] = &egressNode2
+
+				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node1)).To(gomega.Succeed())
+				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node2)).To(gomega.Succeed())
+
+				assignedStatuses, hasOVNAssignment := fakeClusterManagerOVN.eIPC.assignEgressIPs(eIP.Name, eIP.Spec.EgressIPs)
+				gomega.Expect(assignedStatuses).To(gomega.HaveLen(1))
+				gomega.Expect(assignedStatuses[0].Node).To(gomega.Equal(egressNode1.name))
+				gomega.Expect(assignedStatuses[0].EgressIP).To(gomega.Equal(net.ParseIP(egressIP).String()))
+				gomega.Expect(hasOVNAssignment).To(gomega.BeFalse())
+
+				return nil
+			}
+			err := app.Run([]string{app.Name})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		})
+
+		ginkgo.It("should generate mark patch only when shouldAddMark is true", func() {
+			app.Action = func(ctx *cli.Context) error {
+				nodeAlloc := getEgressIPMarkAllocator()
+				ecc := &egressIPClusterController{markAllocator: nodeAlloc}
+				annotations := map[string]string{}
+				statusItems := []egressipv1.EgressIPStatusItem{
+					{Node: "node1", EgressIP: "192.168.1.1"},
+				}
+
+				// Test with shouldAddMark = false
+				patches := ecc.generateEgressIPPatches("test-eip", annotations, statusItems, false)
+				gomega.Expect(patches).To(gomega.HaveLen(1)) // Only status patch
+				gomega.Expect(patches[0].Operation).To(gomega.Equal("replace"))
+				gomega.Expect(patches[0].Path).To(gomega.Equal("/status"))
+
+				// Test with shouldAddMark = true
+				patches = ecc.generateEgressIPPatches("test-eip", annotations, statusItems, true)
+				gomega.Expect(patches).To(gomega.HaveLen(2)) // Mark patch + status patch
+				gomega.Expect(patches[0].Operation).To(gomega.Equal("add"))
+				gomega.Expect(patches[0].Path).To(gomega.Equal("/metadata/annotations"))
+				gomega.Expect(patches[1].Operation).To(gomega.Equal("replace"))
+				gomega.Expect(patches[1].Path).To(gomega.Equal("/status"))
+
+				return nil
+			}
+			err := app.Run([]string{app.Name})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		})
+
+		ginkgo.It("should correctly identify OVN assignments in status items", func() {
+			app.Action = func(ctx *cli.Context) error {
+				node1Name := "node1"
+				node2Name := "node2"
+				node1IPv4 := "192.168.126.41/24"
+				node2IPv4 := "192.168.126.51/24"
+
+				node1 := corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: node1Name,
+						Annotations: map[string]string{
+							"k8s.ovn.org/node-primary-ifaddr": fmt.Sprintf("{\"ipv4\": \"%s\", \"ipv6\": \"%s\"}", node1IPv4, ""),
+							"k8s.ovn.org/node-subnets":        fmt.Sprintf("{\"default\": [\"%s\"]}", "192.168.126.0/24"),
+							util.OVNNodeHostCIDRs:             fmt.Sprintf("[\"%s\", \"%s\"]", node1IPv4, "192.168.127.41/24"),
+						},
+					},
+				}
+
+				node2 := corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: node2Name,
+						Annotations: map[string]string{
+							"k8s.ovn.org/node-primary-ifaddr": fmt.Sprintf("{\"ipv4\": \"%s\", \"ipv6\": \"%s\"}", node2IPv4, ""),
+							"k8s.ovn.org/node-subnets":        fmt.Sprintf("{\"default\": [\"%s\"]}", "192.168.126.0/24"),
+							util.OVNNodeHostCIDRs:             fmt.Sprintf("[\"%s\"]", node2IPv4),
+						},
+					},
+				}
+
+				egressNode1 := setupNode(node1Name, []string{"192.168.126.41/24"}, map[string]string{"192.168.127.102": "eth1"})
+				egressNode2 := setupNode(node2Name, []string{"192.168.126.51/24"}, map[string]string{})
+
+				fakeClusterManagerOVN.start(
+					&corev1.NodeList{Items: []corev1.Node{node1, node2}},
+					&egressipv1.EgressIPList{},
+				)
+
+				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode1.name] = &egressNode1
+				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode2.name] = &egressNode2
+
+				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node1)).To(gomega.Succeed())
+				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node2)).To(gomega.Succeed())
+
+				// Test with OVN network assignment
+				statusItemsOVN := []egressipv1.EgressIPStatusItem{
+					{Node: node2Name, EgressIP: "192.168.126.102"},
+				}
+				hasOVNAssignment := fakeClusterManagerOVN.eIPC.hasOVNAssignmentInStatus(statusItemsOVN)
+				gomega.Expect(hasOVNAssignment).To(gomega.BeTrue())
+
+				// Test with secondary network assignment
+				statusItemsSecondary := []egressipv1.EgressIPStatusItem{
+					{Node: node1Name, EgressIP: "192.168.127.102"},
+				}
+				hasOVNAssignment = fakeClusterManagerOVN.eIPC.hasOVNAssignmentInStatus(statusItemsSecondary)
+				gomega.Expect(hasOVNAssignment).To(gomega.BeFalse())
+
+				// Test with mixed assignments
+				statusItemsMixed := []egressipv1.EgressIPStatusItem{
+					{Node: node2Name, EgressIP: "192.168.126.102"}, // OVN
+					{Node: node1Name, EgressIP: "192.168.127.102"}, // Secondary
+				}
+				hasOVNAssignment = fakeClusterManagerOVN.eIPC.hasOVNAssignmentInStatus(statusItemsMixed)
+				gomega.Expect(hasOVNAssignment).To(gomega.BeTrue())
+
+				// Test with empty status items
+				hasOVNAssignment = fakeClusterManagerOVN.eIPC.hasOVNAssignmentInStatus([]egressipv1.EgressIPStatusItem{})
+				gomega.Expect(hasOVNAssignment).To(gomega.BeFalse())
+
+				return nil
+			}
+			err := app.Run([]string{app.Name})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		})
+
+		ginkgo.It("should restore mark only when there are OVN assignments", func() {
+			app.Action = func(ctx *cli.Context) error {
+				node1Name := "node1"
+				node2Name := "node2"
+				node1IPv4 := "192.168.126.41/24"
+				node2IPv4 := "192.168.126.51/24"
+
+				node1 := corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: node1Name,
+						Annotations: map[string]string{
+							"k8s.ovn.org/node-primary-ifaddr": fmt.Sprintf("{\"ipv4\": \"%s\", \"ipv6\": \"%s\"}", node1IPv4, ""),
+							"k8s.ovn.org/node-subnets":        fmt.Sprintf("{\"default\": [\"%s\"]}", "192.168.126.0/24"),
+							util.OVNNodeHostCIDRs:             fmt.Sprintf("[\"%s\", \"%s\"]", node1IPv4, "192.168.127.41/24"),
+						},
+					},
+				}
+
+				node2 := corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: node2Name,
+						Annotations: map[string]string{
+							"k8s.ovn.org/node-primary-ifaddr": fmt.Sprintf("{\"ipv4\": \"%s\", \"ipv6\": \"%s\"}", node2IPv4, ""),
+							"k8s.ovn.org/node-subnets":        fmt.Sprintf("{\"default\": [\"%s\"]}", "192.168.126.0/24"),
+							util.OVNNodeHostCIDRs:             fmt.Sprintf("[\"%s\"]", node2IPv4),
+						},
+					},
+				}
+
+				egressNode1 := setupNode(node1Name, []string{"192.168.126.41/24"}, map[string]string{"192.168.127.102": "eth1"})
+				egressNode2 := setupNode(node2Name, []string{"192.168.126.51/24"}, map[string]string{})
+
+				fakeClusterManagerOVN.start(
+					&corev1.NodeList{Items: []corev1.Node{node1, node2}},
+					&egressipv1.EgressIPList{},
+				)
+
+				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode1.name] = &egressNode1
+				fakeClusterManagerOVN.eIPC.nodeAllocator.cache[egressNode2.name] = &egressNode2
+
+				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node1)).To(gomega.Succeed())
+				gomega.Expect(fakeClusterManagerOVN.eIPC.initEgressIPAllocator(&node2)).To(gomega.Succeed())
+
+				// Create old EgressIP with mark
+				oldEIP := &egressipv1.EgressIP{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-eip",
+						Annotations: map[string]string{
+							util.EgressIPMarkAnnotation: "50000",
+						},
+					},
+					Status: egressipv1.EgressIPStatus{
+						Items: []egressipv1.EgressIPStatusItem{
+							{Node: node1Name, EgressIP: "192.168.127.102"}, // Secondary network
+						},
+					},
+				}
+
+				// Create new EgressIP without mark (mark was removed/changed)
+				newEIP := &egressipv1.EgressIP{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-eip",
+						Annotations: map[string]string{}, // Mark removed
+					},
+					Status: egressipv1.EgressIPStatus{
+						Items: []egressipv1.EgressIPStatusItem{
+							{Node: node1Name, EgressIP: "192.168.127.102"}, // Secondary network
+						},
+					},
+				}
+
+				// Should NOT restore mark because there are no OVN assignments
+				fakeClusterManagerOVN.eIPC.ensureMark(oldEIP, newEIP)
+
+				// Check that mark was not restored
+				updatedEIP, err := fakeClusterManagerOVN.fakeClient.EgressIPClient.K8sV1().EgressIPs().Get(context.TODO(), "test-eip", metav1.GetOptions{})
+				gomega.Expect(err).NotTo(gomega.HaveOccurred())
+				gomega.Expect(updatedEIP.Annotations).NotTo(gomega.HaveKey(util.EgressIPMarkAnnotation))
+
+				// Now test with OVN assignment - should restore mark
+				newEIP.Status.Items = []egressipv1.EgressIPStatusItem{
+					{Node: node2Name, EgressIP: "192.168.126.102"}, // OVN network
+				}
+
+				fakeClusterManagerOVN.eIPC.ensureMark(oldEIP, newEIP)
+
+				// Check that mark was restored
+				updatedEIP, err = fakeClusterManagerOVN.fakeClient.EgressIPClient.K8sV1().EgressIPs().Get(context.TODO(), "test-eip", metav1.GetOptions{})
+				gomega.Expect(err).NotTo(gomega.HaveOccurred())
+				gomega.Expect(updatedEIP.Annotations).To(gomega.HaveKey(util.EgressIPMarkAnnotation))
+				gomega.Expect(updatedEIP.Annotations[util.EgressIPMarkAnnotation]).To(gomega.Equal("50000"))
+
+				return nil
+			}
+			err := app.Run([]string{app.Name})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		})
 	})
 })

@@ -901,6 +901,9 @@ func (eIPC *egressIPClusterController) reconcileEgressIP(old, new *egressipv1.Eg
 	// Initialize a sets.String which holds egress IPs that were not fully assigned
 	// but are allocated and they are meant to be removed.
 	staleEgressIPs := sets.NewString()
+
+	// Track whether any assignment is for an OVN network
+	hasOVNAssignment := false
 	if old != nil {
 		name = old.Name
 		status = old.Status.Items
@@ -1009,7 +1012,7 @@ func (eIPC *egressIPClusterController) reconcileEgressIP(old, new *egressipv1.Eg
 			eIPC.deleteAllocatorEgressIPAssignments(statusToRemove)
 		}
 		if len(ipsToAssign) > 0 {
-			statusToAdd = eIPC.assignEgressIPs(name, ipsToAssign.UnsortedList())
+			statusToAdd, hasOVNAssignment = eIPC.assignEgressIPs(name, ipsToAssign.UnsortedList())
 			statusToKeep = append(statusToKeep, statusToAdd...)
 		}
 		// Add all assignments which are to be kept to the allocator cache,
@@ -1019,7 +1022,7 @@ func (eIPC *egressIPClusterController) reconcileEgressIP(old, new *egressipv1.Eg
 		// Update the object only on an ADD/UPDATE. If we are processing a
 		// DELETE, new will be nil and we should not update the object.
 		if len(statusToAdd) > 0 || (len(statusToRemove) > 0 && new != nil) {
-			if err := eIPC.patchEgressIP(name, eIPC.generateEgressIPPatches(name, new.Annotations, statusToKeep)...); err != nil {
+			if err := eIPC.patchEgressIP(name, eIPC.generateEgressIPPatches(name, new.Annotations, statusToKeep, hasOVNAssignment)...); err != nil {
 				return err
 			}
 		}
@@ -1047,7 +1050,8 @@ func (eIPC *egressIPClusterController) reconcileEgressIP(old, new *egressipv1.Eg
 			// Update the object only on an ADD/UPDATE. If we are processing a
 			// DELETE, new will be nil and we should not update the object.
 			if new != nil {
-				if err := eIPC.patchEgressIP(name, eIPC.generateEgressIPPatches(name, new.Annotations, statusToKeep)...); err != nil {
+				shouldAddMark := eIPC.hasOVNAssignmentInStatus(statusToKeep)
+				if err := eIPC.patchEgressIP(name, eIPC.generateEgressIPPatches(name, new.Annotations, statusToKeep, shouldAddMark)...); err != nil {
 					return err
 				}
 			}
@@ -1073,7 +1077,7 @@ func (eIPC *egressIPClusterController) reconcileEgressIP(old, new *egressipv1.Eg
 		// processing the answer from the requests we make here, and update OVN
 		// accordingly when we know what the outcome is.
 		if len(ipsToAssign) > 0 {
-			statusToAdd = eIPC.assignEgressIPs(name, ipsToAssign.UnsortedList())
+			statusToAdd, _ = eIPC.assignEgressIPs(name, ipsToAssign.UnsortedList())
 			statusToKeep = append(statusToKeep, statusToAdd...)
 		}
 		// Same as above: Add all assignments which are to be kept to the
@@ -1131,7 +1135,8 @@ func (eIPC *egressIPClusterController) syncCloudPrivateIPConfigs(objs []interfac
 		if cloudPrivateIPNotFound {
 			// There could be one or more stale entry found in egress ip object, remove it by patching egressip
 			// object with updated status.
-			err = eIPC.patchEgressIP(egressIP.Name, eIPC.generateEgressIPPatches(egressIP.Name, egressIP.Annotations, updatedStatus)...)
+			shouldAddMark := eIPC.hasOVNAssignmentInStatus(updatedStatus)
+			err = eIPC.patchEgressIP(egressIP.Name, eIPC.generateEgressIPPatches(egressIP.Name, egressIP.Annotations, updatedStatus, shouldAddMark)...)
 			if err != nil {
 				return fmt.Errorf("syncCloudPrivateIPConfigs unable to update EgressIP status: %w", err)
 			}
@@ -1170,10 +1175,11 @@ func (eIPC *egressIPClusterController) getCloudPrivateIPConfigMap(objs []interfa
 // time, this does not guarantee complete balance, but mostly complete.
 // For Egress IPs that are hosted by secondary host networks, there must be at least
 // one node that hosts the network and exposed via the nodes host-cidrs annotation.
-func (eIPC *egressIPClusterController) assignEgressIPs(name string, egressIPs []string) []egressipv1.EgressIPStatusItem {
+func (eIPC *egressIPClusterController) assignEgressIPs(name string, egressIPs []string) ([]egressipv1.EgressIPStatusItem, bool) {
 	eIPC.nodeAllocator.Lock()
 	defer eIPC.nodeAllocator.Unlock()
 	assignments := []egressipv1.EgressIPStatusItem{}
+	hasOVNAssignment := false
 	assignableNodes, existingAllocations := eIPC.getSortedEgressData()
 	if len(assignableNodes) == 0 {
 		eIPRef := corev1.ObjectReference{
@@ -1182,7 +1188,7 @@ func (eIPC *egressIPClusterController) assignEgressIPs(name string, egressIPs []
 		}
 		eIPC.recorder.Eventf(&eIPRef, corev1.EventTypeWarning, "NoMatchingNodeFound", "no assignable nodes for EgressIP: %s, please tag at least one node with label: %s", name, util.GetNodeEgressLabel())
 		klog.Errorf("No assignable nodes found for EgressIP: %s and requested IPs: %v", name, egressIPs)
-		return assignments
+		return assignments, hasOVNAssignment
 	}
 	klog.V(5).Infof("Current assignments are: %+v", existingAllocations)
 	for _, egressIP := range egressIPs {
@@ -1193,16 +1199,16 @@ func (eIPC *egressIPClusterController) assignEgressIPs(name string, egressIPs []
 		// cluster, therefore there maybe still conflicts when we attempt to assign an egress IP with a different scope.
 		if isIPConflict, conflictedHost, err := eIPC.isEgressIPAddrConflict(eIP); err != nil {
 			klog.Errorf("Egress IP: %v failed to check if EgressIP already is assigned on any interface throughout the cluster: %v", eIP, err)
-			return assignments
+			return assignments, hasOVNAssignment
 		} else if isIPConflict {
 			eIPRef := corev1.ObjectReference{
 				Kind: "EgressIP",
 				Name: name,
 			}
-			eIPC.recorder.Eventf(&eIPRef, corev1.EventTypeWarning, "EgressIPConflict", "Egress IP %s with IP "+
-				"%v is conflicting with a host (%s) IP address and will not be assigned", name, eIP, conflictedHost)
-			klog.Errorf("Egress IP: %v address is already assigned on an interface on node %s", eIP, conflictedHost)
-			return assignments
+		eIPC.recorder.Eventf(&eIPRef, corev1.EventTypeWarning, "EgressIPConflict", "Egress IP %s with IP "+
+			"%v is conflicting with a host (%s) IP address and will not be assigned", name, eIP, conflictedHost)
+		klog.Errorf("Egress IP: %v address is already assigned on an interface on node %s", eIP, conflictedHost)
+		return assignments, hasOVNAssignment
 		}
 		if status, exists := existingAllocations[eIP.String()]; exists {
 			// On public clouds we will re-process assignments for the same IP
@@ -1254,7 +1260,7 @@ func (eIPC *egressIPClusterController) assignEgressIPs(name string, egressIPs []
 					"IP: %q for EgressIP: %s is already allocated for EgressIP: %s on %s", egressIP, name, status.Name, status.Node,
 				)
 				klog.Errorf("IP: %q for EgressIP: %s is already allocated for EgressIP: %s on %s", egressIP, name, status.Name, status.Node)
-				return assignments
+				return assignments, hasOVNAssignment
 			}
 		}
 		// Egress IP for secondary host networks is only available on baremetal environments
@@ -1331,6 +1337,9 @@ func (eIPC *egressIPClusterController) assignEgressIPs(name string, egressIPs []
 					continue
 				}
 			}
+			if util.IsOVNNetwork(eNode.egressIPConfig, eIP) {
+				hasOVNAssignment = true
+			}
 			assignments = append(assignments, egressipv1.EgressIPStatusItem{
 				Node:     eNode.name,
 				EgressIP: eIP.String(),
@@ -1348,7 +1357,7 @@ func (eIPC *egressIPClusterController) assignEgressIPs(name string, egressIPs []
 		}
 		eIPC.recorder.Eventf(&eIPRef, corev1.EventTypeWarning, "NoMatchingNodeFound", "No matching nodes found, which can host any of the egress IPs: %v for object EgressIP: %s", egressIPs, name)
 		klog.Errorf("No matching host found for EgressIP: %s", name)
-		return assignments
+		return assignments, hasOVNAssignment
 	}
 	if len(assignments) < len(egressIPs) {
 		eIPRef := corev1.ObjectReference{
@@ -1357,7 +1366,7 @@ func (eIPC *egressIPClusterController) assignEgressIPs(name string, egressIPs []
 		}
 		eIPC.recorder.Eventf(&eIPRef, corev1.EventTypeWarning, "UnassignedRequest", "Not all egress IPs for EgressIP: %s could be assigned, please tag more nodes", name)
 	}
-	return assignments
+	return assignments, hasOVNAssignment
 }
 
 func getIPFamilyAllocationCount(allocations map[string]string, isIPv6 bool) (count int) {
@@ -1560,7 +1569,8 @@ func (eIPC *egressIPClusterController) reconcileCloudPrivateIPConfig(old, new *o
 					updatedStatus = append(updatedStatus, status)
 				}
 			}
-			if err := eIPC.patchEgressIP(egressIP.Name, eIPC.generateEgressIPPatches(egressIP.Name, egressIP.Annotations, updatedStatus)...); err != nil {
+			shouldAddMark := eIPC.hasOVNAssignmentInStatus(updatedStatus)
+			if err := eIPC.patchEgressIP(egressIP.Name, eIPC.generateEgressIPPatches(egressIP.Name, egressIP.Annotations, updatedStatus, shouldAddMark)...); err != nil {
 				return err
 			}
 		}
@@ -1607,7 +1617,8 @@ func (eIPC *egressIPClusterController) reconcileCloudPrivateIPConfig(old, new *o
 		}
 		if !hasStatus {
 			statusToKeep := append(egressIP.Status.Items, statusItem)
-			if err := eIPC.patchEgressIP(egressIP.Name, eIPC.generateEgressIPPatches(egressIP.Name, egressIP.Annotations, statusToKeep)...); err != nil {
+			shouldAddMark := eIPC.hasOVNAssignmentInStatus(statusToKeep)
+			if err := eIPC.patchEgressIP(egressIP.Name, eIPC.generateEgressIPPatches(egressIP.Name, egressIP.Annotations, statusToKeep, shouldAddMark)...); err != nil {
 				return err
 			}
 		}
@@ -1754,14 +1765,14 @@ func (eIPC *egressIPClusterController) patchEgressIP(name string, patches ...jso
 	})
 }
 
-// generateEgressIPPatches conditionally generates a mark patch if the mark doesn't exist. If it fails to allocate a mark,
-// log an error instead of failing because we do not wish to block primary default network egress IP assignments due to potential
-// mark range exhaustion. Primary default network egress IP currently does not utilize marks to config EgressIP.
+// generateEgressIPPatches conditionally generates a mark patch if the mark doesn't exist and shouldAddMark is true.
+// If it fails to allocate a mark, log an error instead of failing because we do not wish to block primary default network
+// egress IP assignments due to potential mark range exhaustion. Primary default network egress IP currently does not utilize marks to config EgressIP.
 // Generating the status patch is mandatory
 func (eIPC *egressIPClusterController) generateEgressIPPatches(name string, annotations map[string]string,
-	statusItems []egressipv1.EgressIPStatusItem) []jsonPatchOperation {
+	statusItems []egressipv1.EgressIPStatusItem, shouldAddMark bool) []jsonPatchOperation {
 	patches := make([]jsonPatchOperation, 0, 1)
-	if !util.IsEgressIPMarkSet(annotations) {
+	if shouldAddMark && !util.IsEgressIPMarkSet(annotations) {
 		if mark, _, err := eIPC.getOrAllocMark(name); err != nil {
 			klog.Errorf("Failed to get mark for EgressIP %s: %v", name, err)
 		} else {
@@ -1791,6 +1802,22 @@ func generateStatusPatchOp(statusItems []egressipv1.EgressIPStatusItem) jsonPatc
 			Items: statusItems,
 		},
 	}
+}
+
+// hasOVNAssignmentInStatus checks if any status item is assigned to an OVN network
+func (eIPC *egressIPClusterController) hasOVNAssignmentInStatus(statusItems []egressipv1.EgressIPStatusItem) bool {
+	for _, statusItem := range statusItems {
+		eNode, exists := eIPC.nodeAllocator.cache[statusItem.Node]
+		if !exists {
+			klog.Warningf("Node %s not found in allocator cache", statusItem.Node)
+			continue
+		}
+		ip := net.ParseIP(statusItem.EgressIP)
+		if ip != nil && util.IsOVNNetwork(eNode.egressIPConfig, ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // syncEgressIPMarkAllocator iterates over all existing EgressIPs. It builds a mark cache of existing marks stored on each
@@ -1848,17 +1875,20 @@ func getEgressIPMarkAllocator() id.Allocator {
 	return id.NewIDAllocator("eip_mark", eipMarkMax-eipMarkMin)
 }
 
-// ensureMark ensures that if a mark was remove or changed value, then restore the mark.
+// ensureMark ensures that if a mark was removed or changed value, then restore the mark only if it should exist.
 func (eIPC *egressIPClusterController) ensureMark(old, new *egressipv1.EgressIP) {
 	// Adding the mark to annotations is bundled with status update in-order to minimise updates, cover the case where there is no update to status
 	// and mark annotation has been modified / removed. This should only occur for an update and the mark was previous set.
 	if old != nil && new != nil {
 		if util.IsEgressIPMarkSet(old.Annotations) && util.EgressIPMarkAnnotationChanged(old.Annotations, new.Annotations) {
-			mark, _, err := eIPC.getOrAllocMark(new.Name)
-			if err != nil {
-				klog.Errorf("Failed to restore EgressIP %s mark because unable to retrieve mark: %v", new.Name, err)
-			} else if err = eIPC.patchEgressIP(new.Name, generateMarkPatchOp(mark)); err != nil {
-				klog.Errorf("Failed to restore EgressIP %s mark because patching failed: %v", new.Name, err)
+			// Only restore the mark if there are OVN network assignments
+			if eIPC.hasOVNAssignmentInStatus(new.Status.Items) {
+				mark, _, err := eIPC.getOrAllocMark(new.Name)
+				if err != nil {
+					klog.Errorf("Failed to restore EgressIP %s mark because unable to retrieve mark: %v", new.Name, err)
+				} else if err = eIPC.patchEgressIP(new.Name, generateMarkPatchOp(mark)); err != nil {
+					klog.Errorf("Failed to restore EgressIP %s mark because patching failed: %v", new.Name, err)
+				}
 			}
 		}
 	}
