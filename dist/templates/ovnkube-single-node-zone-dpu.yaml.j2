@@ -280,6 +280,10 @@ spec:
           value: "dpu"
         - name: OVN_EGRESSSERVICE_ENABLE
           value: "{{ ovn_egress_service_enable }}"
+        - name: OVN_EGRESS_GATEWAY_ENABLE
+          value: "{{ ovn_egress_gateway_enable }}"
+        - name: OVN_EGRESS_GATEWAY_SOURCE_CIDRS
+          value: "{{ ovn_egress_gateway_source_cidrs }}"
         - name: OVN_DAEMONSET_VERSION
           value: "1.2.0"
         - name: OVNKUBE_LOGLEVEL

@@ -81,6 +81,8 @@ fi
 # OVN_EGRESSFIREWALL_ENABLE - enable egressFirewall for ovn-kubernetes
 # OVN_EGRESSQOS_ENABLE - enable egress QoS for ovn-kubernetes
 # OVN_EGRESSSERVICE_ENABLE - enable egress Service for ovn-kubernetes
+# OVN_EGRESS_GATEWAY_ENABLE - enable egress gateway for ovn-kubernetes (route all pod egress through egress nodes)
+# OVN_EGRESS_GATEWAY_SOURCE_CIDRS - comma-separated source CIDRs for egress gateway (empty = catch-all)
 # OVN_UNPRIVILEGED_MODE - execute CNI ovs/netns commands from host (default no)
 # OVNKUBE_NODE_MODE - ovnkube node mode of operation, one of: full, dpu, dpu-host (default: full)
 # OVNKUBE_NODE_MGMT_PORT_NETDEV - ovnkube node management port netdev.
@@ -266,6 +268,10 @@ ovn_egressfirewall_enable=${OVN_EGRESSFIREWALL_ENABLE:-false}
 ovn_egressqos_enable=${OVN_EGRESSQOS_ENABLE:-false}
 #OVN_EGRESSSERVICE_ENABLE - enable egress Service for ovn-kubernetes
 ovn_egressservice_enable=${OVN_EGRESSSERVICE_ENABLE:-false}
+#OVN_EGRESS_GATEWAY_ENABLE - enable egress gateway for ovn-kubernetes
+ovn_egress_gateway_enable=${OVN_EGRESS_GATEWAY_ENABLE:-false}
+#OVN_EGRESS_GATEWAY_SOURCE_CIDRS - source CIDRs for egress gateway
+ovn_egress_gateway_source_cidrs=${OVN_EGRESS_GATEWAY_SOURCE_CIDRS:-}
 #OVN_MULTI_NETWORK_ENABLE - enable multiple network support for ovn-kubernetes
 ovn_multi_network_enable=${OVN_MULTI_NETWORK_ENABLE:-false}
 #OVN_NETWORK_SEGMENTATION_ENABLE - enable user defined primary networks for ovn-kubernetes
@@ -1421,6 +1427,18 @@ ovn-master() {
   fi
   echo "egressservice_enabled_flag=${egressservice_enabled_flag}"
 
+  egress_gateway_enabled_flag=
+  if [[ ${ovn_egress_gateway_enable} == "true" ]]; then
+	  egress_gateway_enabled_flag="--enable-egress-gateway"
+  fi
+  echo "egress_gateway_enabled_flag=${egress_gateway_enabled_flag}"
+
+  egress_gateway_source_cidrs_flag=
+  if [[ -n ${ovn_egress_gateway_source_cidrs} ]]; then
+	  egress_gateway_source_cidrs_flag="--egress-gateway-source-cidrs=${ovn_egress_gateway_source_cidrs}"
+  fi
+  echo "egress_gateway_source_cidrs_flag=${egress_gateway_source_cidrs_flag}"
+
   ovnkube_master_metrics_bind_address="${metrics_endpoint_ip}:${metrics_master_port}"
   local ovnkube_metrics_tls_opts=""
   if [[ ${OVNKUBE_METRICS_PK} != "" && ${OVNKUBE_METRICS_CERT} != "" ]]; then
@@ -1519,6 +1537,8 @@ ovn-master() {
     ${egressip_healthcheck_port_flag} \
     ${egressqos_enabled_flag} \
     ${egressservice_enabled_flag} \
+    ${egress_gateway_enabled_flag} \
+    ${egress_gateway_source_cidrs_flag} \
     ${empty_lb_events_flag} \
     ${hybrid_overlay_flags} \
     ${init_node_flags} \
@@ -1774,6 +1794,18 @@ ovnkube-controller() {
   fi
   echo "egressservice_enabled_flag=${egressservice_enabled_flag}"
 
+  egress_gateway_enabled_flag=
+  if [[ ${ovn_egress_gateway_enable} == "true" ]]; then
+	  egress_gateway_enabled_flag="--enable-egress-gateway"
+  fi
+  echo "egress_gateway_enabled_flag=${egress_gateway_enabled_flag}"
+
+  egress_gateway_source_cidrs_flag=
+  if [[ -n ${ovn_egress_gateway_source_cidrs} ]]; then
+	  egress_gateway_source_cidrs_flag="--egress-gateway-source-cidrs=${ovn_egress_gateway_source_cidrs}"
+  fi
+  echo "egress_gateway_source_cidrs_flag=${egress_gateway_source_cidrs_flag}"
+
   ovnkube_master_metrics_bind_address="${metrics_endpoint_ip}:${metrics_master_port}"
   echo "ovnkube_master_metrics_bind_address=${ovnkube_master_metrics_bind_address}"
 
@@ -1882,6 +1914,8 @@ ovnkube-controller() {
     ${egressip_healthcheck_port_flag} \
     ${egressqos_enabled_flag} \
     ${egressservice_enabled_flag} \
+    ${egress_gateway_enabled_flag} \
+    ${egress_gateway_source_cidrs_flag} \
     ${empty_lb_events_flag} \
     ${hybrid_overlay_flags} \
     ${libovsdb_client_logfile_flag} \
@@ -2138,6 +2172,18 @@ ovnkube-controller-with-node() {
 	  egressservice_enabled_flag="--enable-egress-service"
   fi
   echo "egressservice_enabled_flag=${egressservice_enabled_flag}"
+
+  egress_gateway_enabled_flag=
+  if [[ ${ovn_egress_gateway_enable} == "true" ]]; then
+	  egress_gateway_enabled_flag="--enable-egress-gateway"
+  fi
+  echo "egress_gateway_enabled_flag=${egress_gateway_enabled_flag}"
+
+  egress_gateway_source_cidrs_flag=
+  if [[ -n ${ovn_egress_gateway_source_cidrs} ]]; then
+	  egress_gateway_source_cidrs_flag="--egress-gateway-source-cidrs=${ovn_egress_gateway_source_cidrs}"
+  fi
+  echo "egress_gateway_source_cidrs_flag=${egress_gateway_source_cidrs_flag}"
 
   netflow_targets=
   if [[ -n ${ovn_netflow_targets} ]]; then
@@ -2408,6 +2454,8 @@ ovnkube-controller-with-node() {
     ${egressip_healthcheck_port_flag} \
     ${egressqos_enabled_flag} \
     ${egressservice_enabled_flag} \
+    ${egress_gateway_enabled_flag} \
+    ${egress_gateway_source_cidrs_flag} \
     ${empty_lb_events_flag} \
     ${enable_lflow_cache} \
     ${hybrid_overlay_flags} \
@@ -2514,6 +2562,18 @@ ovn-cluster-manager() {
          egressservice_enabled_flag="--enable-egress-service"
   fi
   echo "egressservice_enabled_flag=${egressservice_enabled_flag}"
+
+  egress_gateway_enabled_flag=
+  if [[ ${ovn_egress_gateway_enable} == "true" ]]; then
+         egress_gateway_enabled_flag="--enable-egress-gateway"
+  fi
+  echo "egress_gateway_enabled_flag=${egress_gateway_enabled_flag}"
+
+  egress_gateway_source_cidrs_flag=
+  if [[ -n ${ovn_egress_gateway_source_cidrs} ]]; then
+	  egress_gateway_source_cidrs_flag="--egress-gateway-source-cidrs=${ovn_egress_gateway_source_cidrs}"
+  fi
+  echo "egress_gateway_source_cidrs_flag=${egress_gateway_source_cidrs_flag}"
 
   anp_enabled_flag=
   if [[ ${ovn_admin_network_policy_enable} == "true" ]]; then
@@ -2702,6 +2762,8 @@ ovn-cluster-manager() {
     ${egressip_healthcheck_port_flag} \
     ${egressqos_enabled_flag} \
     ${egressservice_enabled_flag} \
+    ${egress_gateway_enabled_flag} \
+    ${egress_gateway_source_cidrs_flag} \
     ${empty_lb_events_flag} \
     ${hybrid_overlay_flags} \
     ${multicast_enabled_flag} \
@@ -2873,6 +2935,16 @@ ovn-node() {
   egressservice_enabled_flag=
   if [[ ${ovn_egressservice_enable} == "true" ]]; then
 	  egressservice_enabled_flag="--enable-egress-service"
+  fi
+
+  egress_gateway_enabled_flag=
+  if [[ ${ovn_egress_gateway_enable} == "true" ]]; then
+	  egress_gateway_enabled_flag="--enable-egress-gateway"
+  fi
+
+  egress_gateway_source_cidrs_flag=
+  if [[ -n ${ovn_egress_gateway_source_cidrs} ]]; then
+	  egress_gateway_source_cidrs_flag="--egress-gateway-source-cidrs=${ovn_egress_gateway_source_cidrs}"
   fi
 
   multi_network_enabled_flag=
@@ -3123,6 +3195,8 @@ ovn-node() {
         ${egressip_enabled_flag} \
         ${egressip_healthcheck_port_flag} \
         ${egressservice_enabled_flag} \
+        ${egress_gateway_enabled_flag} \
+        ${egress_gateway_source_cidrs_flag} \
         ${enable_lflow_cache} \
         ${hybrid_overlay_flags} \
         ${ipfix_config} \

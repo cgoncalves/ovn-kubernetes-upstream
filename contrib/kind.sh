@@ -41,6 +41,8 @@ usage() {
     echo "                 [-dudn | --dynamic-udn-allocation]"
     echo "                 [-dug | --dynamic-udn-removal-grace-period <seconds>]"
     echo "                 [-adv | --advertise-default-network]"
+    echo "                 [-egw | --egress-gateway-enable]"
+    echo "                 [--egress-gateway-source-cidrs <cidrs>]"
     echo "                 [-nqe | --network-qos-enable]"
     echo "                 [-noe | --no-overlay-enable [snat-enabled]]"
     echo "                 [--isolated]"
@@ -106,6 +108,8 @@ echo "-is  | --ipsec                                Enable IPsec encryption (spa
 echo "-sm  | --scale-metrics                        Enable scale metrics"
 echo "-cm  | --compact-mode                         Enable compact mode, ovnkube master and node run in the same process."
 echo "-ce  | --enable-central                       [DEPRECATED] Deploy with OVN Central (Legacy Architecture)"
+echo "-egw | --egress-gateway-enable                Enable egress gateway. Route pod egress traffic through egress-assignable nodes. DEFAULT: Disabled."
+echo "--egress-gateway-source-cidrs                 Comma-separated source CIDRs for egress gateway. When empty, all pod subnets are steered. DEFAULT: empty (catch-all)."
 echo "-nqe | --network-qos-enable                   Enable network QoS. DEFAULT: Disabled."
 echo "--disable-ovnkube-identity                    Disable per-node cert and ovnkube-identity webhook"
 echo "-npz | --nodes-per-zone                       If interconnect is enabled, number of nodes per zone (Default 1). If this value > 1, then (total k8s nodes (workers + 1) / num of nodes per zone) should be zero."
@@ -357,6 +361,11 @@ parse_args() {
             -ic | --enable-interconnect )         OVN_ENABLE_INTERCONNECT=true
                                                   IC_ARG_PROVIDED=true
                                                   ;;
+            -egw | --egress-gateway-enable) ENABLE_EGRESS_GATEWAY=true
+                                                  ;;
+            --egress-gateway-source-cidrs) shift
+                                                  EGRESS_GATEWAY_SOURCE_CIDRS=$1
+                                                  ;;
             -noe | --no-overlay-enable)         ENABLE_NO_OVERLAY=true
                                                   # Check if next argument is a valid value
                                                   if [[ -n "$2" && ! "$2" =~ ^- ]]; then
@@ -480,6 +489,8 @@ print_params() {
      echo "ENABLE_PRE_CONF_UDN_ADDR = $ENABLE_PRE_CONF_UDN_ADDR"
      echo "DYNAMIC_UDN_ALLOCATION = $DYNAMIC_UDN_ALLOCATION"
      echo "DYNAMIC_UDN_GRACE_PERIOD =  $DYNAMIC_UDN_GRACE_PERIOD"
+     echo "ENABLE_EGRESS_GATEWAY = $ENABLE_EGRESS_GATEWAY"
+     echo "EGRESS_GATEWAY_SOURCE_CIDRS = $EGRESS_GATEWAY_SOURCE_CIDRS"
      echo "ENABLE_NO_OVERLAY = $ENABLE_NO_OVERLAY"
      echo "ENABLE_NO_OVERLAY_OUTBOUND_SNAT = $ENABLE_NO_OVERLAY_OUTBOUND_SNAT"
      echo "OVN_ENABLE_INTERCONNECT = $OVN_ENABLE_INTERCONNECT"
@@ -565,6 +576,8 @@ set_default_params() {
 
   OVN_HOST_NETWORK_NAMESPACE=${OVN_HOST_NETWORK_NAMESPACE:-ovn-host-network}
   OVN_EGRESSIP_HEALTHCHECK_PORT=${OVN_EGRESSIP_HEALTHCHECK_PORT:-9107}
+  ENABLE_EGRESS_GATEWAY=${ENABLE_EGRESS_GATEWAY:-false}
+  EGRESS_GATEWAY_SOURCE_CIDRS=${EGRESS_GATEWAY_SOURCE_CIDRS:-}
   OVN_DEPLOY_PODS=${OVN_DEPLOY_PODS:-"ovnkube-identity ovnkube-zone-controller ovnkube-control-plane ovnkube-master ovnkube-node"}
   OVN_METRICS_SCALE_ENABLE=${OVN_METRICS_SCALE_ENABLE:-false}
   OVN_ISOLATED=${OVN_ISOLATED:-false}
@@ -751,6 +764,8 @@ create_ovn_kube_manifests() {
     --egress-firewall-enable=true \
     --egress-qos-enable=true \
     --egress-service-enable=true \
+    --egress-gateway-enable="${ENABLE_EGRESS_GATEWAY}" \
+    --egress-gateway-source-cidrs="${EGRESS_GATEWAY_SOURCE_CIDRS}" \
     --v4-join-subnet="${JOIN_SUBNET_IPV4}" \
     --v6-join-subnet="${JOIN_SUBNET_IPV6}" \
     --v4-masquerade-subnet="${MASQUERADE_SUBNET_IPV4}" \

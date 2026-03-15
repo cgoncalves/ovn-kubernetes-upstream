@@ -68,6 +68,8 @@ OVN_EGRESSIP_HEALTHCHECK_PORT=
 OVN_EGRESSFIREWALL_ENABLE=
 OVN_EGRESSQOS_ENABLE=
 OVN_EGRESSSERVICE_ENABLE=
+OVN_EGRESS_GATEWAY_ENABLE=
+OVN_EGRESS_GATEWAY_SOURCE_CIDRS=
 OVN_MULTI_NETWORK_ENABLE=
 OVN_NETWORK_SEGMENTATION_ENABLE="false"
 OVN_NETWORK_CONNECT_ENABLE=
@@ -315,6 +317,12 @@ while [ "$1" != "" ]; do
   --egress-service-enable)
     OVN_EGRESSSERVICE_ENABLE=$VALUE
     ;;
+  --egress-gateway-enable)
+    OVN_EGRESS_GATEWAY_ENABLE=$VALUE
+    ;;
+  --egress-gateway-source-cidrs)
+    OVN_EGRESS_GATEWAY_SOURCE_CIDRS=$VALUE
+    ;;
   --v4-join-subnet)
     OVN_V4_JOIN_SUBNET=$VALUE
     ;;
@@ -531,6 +539,10 @@ ovn_egress_qos_enable=${OVN_EGRESSQOS_ENABLE}
 echo "ovn_egress_qos_enable: ${ovn_egress_qos_enable}"
 ovn_egress_service_enable=${OVN_EGRESSSERVICE_ENABLE}
 echo "ovn_egress_service_enable: ${ovn_egress_service_enable}"
+ovn_egress_gateway_enable=${OVN_EGRESS_GATEWAY_ENABLE}
+echo "ovn_egress_gateway_enable: ${ovn_egress_gateway_enable}"
+ovn_egress_gateway_source_cidrs=${OVN_EGRESS_GATEWAY_SOURCE_CIDRS}
+echo "ovn_egress_gateway_source_cidrs: ${ovn_egress_gateway_source_cidrs}"
 ovn_multi_network_enable=${OVN_MULTI_NETWORK_ENABLE}
 echo "ovn_multi_network_enable: ${ovn_multi_network_enable}"
 ovn_network_segmentation_enable=${OVN_NETWORK_SEGMENTATION_ENABLE}
@@ -716,6 +728,8 @@ ovn_image=${ovnkube_image} \
   ovn_advertised_udn_isolation_mode=${ovn_advertised_udn_isolation_mode} \
   ovn_no_overlay_enable=${ovn_no_overlay_enable} \
   ovn_egress_service_enable=${ovn_egress_service_enable} \
+  ovn_egress_gateway_enable=${ovn_egress_gateway_enable} \
+  ovn_egress_gateway_source_cidrs=${ovn_egress_gateway_source_cidrs} \
   ovn_ssl_en=${ovn_ssl_en} \
   ovn_remote_probe_interval=${ovn_remote_probe_interval} \
   ovn_monitor_all=${ovn_monitor_all} \
@@ -777,6 +791,8 @@ ovn_image=${ovnkube_image} \
   ovn_dynamic_udn_grace_period=${ovn_dynamic_udn_grace_period} \
   ovn_no_overlay_enable=${ovn_no_overlay_enable} \
   ovn_egress_service_enable=${ovn_egress_service_enable} \
+  ovn_egress_gateway_enable=${ovn_egress_gateway_enable} \
+  ovn_egress_gateway_source_cidrs=${ovn_egress_gateway_source_cidrs} \
   ovn_ssl_en=${ovn_ssl_en} \
   ovn_remote_probe_interval=${ovn_remote_probe_interval} \
   ovn_monitor_all=${ovn_monitor_all} \
@@ -831,6 +847,8 @@ ovn_image=${image} \
   ovn_egress_ip_enable=${ovn_egress_ip_enable} \
   ovn_egress_ip_healthcheck_port=${ovn_egress_ip_healthcheck_port} \
   ovn_egress_service_enable=${ovn_egress_service_enable} \
+  ovn_egress_gateway_enable=${ovn_egress_gateway_enable} \
+  ovn_egress_gateway_source_cidrs=${ovn_egress_gateway_source_cidrs} \
   ovn_netflow_targets=${ovn_netflow_targets} \
   ovn_enable_dynamic_udn_allocation=${ovn_enable_dynamic_udn_allocation} \
   ovn_dynamic_udn_grace_period=${ovn_dynamic_udn_grace_period} \
@@ -891,6 +909,8 @@ ovn_image=${ovnkube_image} \
   ovn_dynamic_udn_grace_period=${ovn_dynamic_udn_grace_period} \
   ovn_no_overlay_enable=${ovn_no_overlay_enable} \
   ovn_egress_service_enable=${ovn_egress_service_enable} \
+  ovn_egress_gateway_enable=${ovn_egress_gateway_enable} \
+  ovn_egress_gateway_source_cidrs=${ovn_egress_gateway_source_cidrs} \
   ovn_ssl_en=${ovn_ssl_en} \
   ovn_master_count=${ovn_master_count} \
   ovn_gateway_mode=${ovn_gateway_mode} \
@@ -951,6 +971,8 @@ ovn_image=${ovnkube_image} \
   ovn_dynamic_udn_grace_period=${ovn_dynamic_udn_grace_period} \
   ovn_no_overlay_enable=${ovn_no_overlay_enable} \
   ovn_egress_service_enable=${ovn_egress_service_enable} \
+  ovn_egress_gateway_enable=${ovn_egress_gateway_enable} \
+  ovn_egress_gateway_source_cidrs=${ovn_egress_gateway_source_cidrs} \
   ovn_ssl_en=${ovn_ssl_en} \
   ovn_master_count=${ovn_master_count} \
   ovn_gateway_mode=${ovn_gateway_mode} \
@@ -1041,6 +1063,8 @@ ovn_image=${ovnkube_image} \
   ovn_advertised_udn_isolation_mode=${ovn_advertised_udn_isolation_mode} \
   ovn_no_overlay_enable=${ovn_no_overlay_enable} \
   ovn_egress_service_enable=${ovn_egress_service_enable} \
+  ovn_egress_gateway_enable=${ovn_egress_gateway_enable} \
+  ovn_egress_gateway_source_cidrs=${ovn_egress_gateway_source_cidrs} \
   ovn_ssl_en=${ovn_ssl_en} \
   ovn_remote_probe_interval=${ovn_remote_probe_interval} \
   ovn_monitor_all=${ovn_monitor_all} \
@@ -1136,6 +1160,8 @@ ovn_image=${ovnkube_image} \
   ovn_pre_conf_udn_addr_enable=${ovn_pre_conf_udn_addr_enable} \
   ovn_advertised_udn_isolation_mode=${ovn_advertised_udn_isolation_mode} \
   ovn_egress_service_enable=${ovn_egress_service_enable} \
+  ovn_egress_gateway_enable=${ovn_egress_gateway_enable} \
+  ovn_egress_gateway_source_cidrs=${ovn_egress_gateway_source_cidrs} \
   ovn_ssl_en=${ovn_ssl_en} \
   ovn_remote_probe_interval=${ovn_remote_probe_interval} \
   ovn_monitor_all=${ovn_monitor_all} \
@@ -1202,6 +1228,8 @@ ovn_image=${ovnkube_image} \
   ovn_egress_ip_enable=${ovn_egress_ip_enable} \
   ovn_egress_ip_healthcheck_port=${ovn_egress_ip_healthcheck_port} \
   ovn_egress_service_enable=${ovn_egress_service_enable} \
+  ovn_egress_gateway_enable=${ovn_egress_gateway_enable} \
+  ovn_egress_gateway_source_cidrs=${ovn_egress_gateway_source_cidrs} \
   ovn_egress_firewall_enable=${ovn_egress_firewall_enable} \
   ovn_egress_qos_enable=${ovn_egress_qos_enable} \
   ovn_multi_network_enable=${ovn_multi_network_enable} \
