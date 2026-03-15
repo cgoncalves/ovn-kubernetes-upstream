@@ -488,6 +488,13 @@ type OVNKubernetesFeatureConfig struct {
 	EnableEgressFirewall            bool `gcfg:"enable-egress-firewall"`
 	EnableEgressQoS                 bool `gcfg:"enable-egress-qos"`
 	EnableEgressService             bool `gcfg:"enable-egress-service"`
+	EnableEgressGateway             bool   `gcfg:"enable-egress-gateway"`
+	// RawEgressGatewaySourceCIDRs holds the unparsed source CIDRs for egress gateway.
+	// When set, only traffic from these CIDRs is steered through egress nodes.
+	// When empty, traffic from all cluster pod subnets is steered (catch-all).
+	RawEgressGatewaySourceCIDRs string `gcfg:"egress-gateway-source-cidrs"`
+	// EgressGatewaySourceCIDRs holds parsed source CIDRs for egress gateway.
+	EgressGatewaySourceCIDRs []*net.IPNet
 	EgressIPNodeHealthCheckPort     int  `gcfg:"egressip-node-healthcheck-port"`
 	EnableMultiNetwork              bool `gcfg:"enable-multi-network"`
 	EnableNetworkSegmentation       bool `gcfg:"enable-network-segmentation"`
@@ -1284,6 +1291,18 @@ var OVNK8sFeatureFlags = []cli.Flag{
 		Usage:       "Use EgressService CRD feature with ovn-kubernetes.",
 		Destination: &cliConfig.OVNKubernetesFeature.EnableEgressService,
 		Value:       OVNKubernetesFeature.EnableEgressService,
+	},
+	&cli.BoolFlag{
+		Name:        "enable-egress-gateway",
+		Usage:       "Route all pod egress traffic through egress-assignable nodes.",
+		Destination: &cliConfig.OVNKubernetesFeature.EnableEgressGateway,
+		Value:       OVNKubernetesFeature.EnableEgressGateway,
+	},
+	&cli.StringFlag{
+		Name:        "egress-gateway-source-cidrs",
+		Usage:       "A comma-separated list of source CIDRs whose egress traffic is steered through egress-assignable nodes. When empty, all cluster pod subnets are used (catch-all). Requires enable-egress-gateway.",
+		Destination: &cliConfig.OVNKubernetesFeature.RawEgressGatewaySourceCIDRs,
+		Value:       OVNKubernetesFeature.RawEgressGatewaySourceCIDRs,
 	},
 	&cli.BoolFlag{
 		Name:        "enable-multi-external-gateway",
@@ -2293,6 +2312,22 @@ func buildOVNKubernetesFeatureConfig(cli, file *config) error {
 	}
 	if OVNKubernetesFeature.EnableDynamicUDNAllocation && !OVNKubernetesFeature.EnableNetworkSegmentation {
 		return fmt.Errorf("the Dynamic UDN Allocation feature cannot be enabled without also enabling Network Segmentation")
+	}
+	if OVNKubernetesFeature.RawEgressGatewaySourceCIDRs != "" {
+		if !OVNKubernetesFeature.EnableEgressGateway {
+			return fmt.Errorf("egress-gateway-source-cidrs requires enable-egress-gateway to be enabled")
+		}
+		for _, cidrStr := range strings.Split(OVNKubernetesFeature.RawEgressGatewaySourceCIDRs, ",") {
+			cidrStr = strings.TrimSpace(cidrStr)
+			if cidrStr == "" {
+				continue
+			}
+			_, cidr, err := net.ParseCIDR(cidrStr)
+			if err != nil {
+				return fmt.Errorf("invalid egress-gateway-source-cidrs entry %q: %v", cidrStr, err)
+			}
+			OVNKubernetesFeature.EgressGatewaySourceCIDRs = append(OVNKubernetesFeature.EgressGatewaySourceCIDRs, cidr)
+		}
 	}
 	return nil
 }

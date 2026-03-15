@@ -375,7 +375,14 @@ func (cm *ControllerManager) initDefaultNetworkController(observManager *observa
 	if err != nil {
 		return fmt.Errorf("failed to create common network controller info: %w", err)
 	}
-	defaultController, err := ovn.NewDefaultNetworkController(cnci, observManager, cm.networkManager.Interface(), cm.routeImportManager, cm.eIPController, cm.portCache, cm.addressSetManager)
+	var egc *ovn.EgressGatewayController
+	if config.OVNKubernetesFeature.EnableEgressGateway {
+		egc = ovn.NewEgressGatewayController(cm.nbClient, cm.watchFactory,
+			addressset.NewOvnAddressSetFactory(cm.nbClient, config.IPv4Mode, config.IPv6Mode),
+			cm.networkManager.Interface(), ovntypes.DefaultNetworkControllerName, config.Default.Zone,
+			config.IPv4Mode, config.IPv6Mode)
+	}
+	defaultController, err := ovn.NewDefaultNetworkController(cnci, observManager, cm.networkManager.Interface(), cm.routeImportManager, cm.eIPController, egc, cm.portCache, cm.addressSetManager)
 	if err != nil {
 		return err
 	}

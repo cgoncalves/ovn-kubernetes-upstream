@@ -307,6 +307,20 @@ func (o *FakeOVN) init(nadList []nettypes.NetworkAttachmentDefinition) {
 	o.controller.multicastSupport = config.EnableMulticast
 	o.eIPController.zone = o.controller.zone
 
+	if config.OVNKubernetesFeature.EnableEgressGateway {
+		var egcASF addressset.AddressSetFactory
+		if o.asf != nil {
+			egcASF = o.asf
+		} else {
+			egcASF = o.eIPController.addressSetFactory
+		}
+		o.controller.egc = NewEgressGatewayController(
+			o.nbClient, o.watcher, egcASF, o.networkManager.Interface(),
+			types.DefaultNetworkControllerName, o.controller.zone,
+			config.IPv4Mode, config.IPv6Mode,
+		)
+	}
+
 	setupCOPP := false
 	setupClusterController(o.controller, setupCOPP)
 	for _, n := range nadList {
@@ -480,7 +494,7 @@ func NewOvnController(
 		return nil, err
 	}
 
-	dnc, err := newDefaultNetworkControllerCommon(cnci, stopChan, wg, addressSetFactory, networkManager, nil, nil, eIPController, portCache, addressSetManager)
+	dnc, err := newDefaultNetworkControllerCommon(cnci, stopChan, wg, addressSetFactory, networkManager, nil, nil, eIPController, nil, portCache, addressSetManager)
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 	if nbZoneFailed {
