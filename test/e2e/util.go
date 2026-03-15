@@ -1451,6 +1451,11 @@ func isLocalGWModeEnabled() bool {
 	return present && val == "local"
 }
 
+func isEgressGatewayEnabled() bool {
+	val, present := os.LookupEnv("ENABLE_EGRESS_GATEWAY")
+	return present && val == "true"
+}
+
 func isHelmEnabled() bool {
 	val, present := os.LookupEnv("USE_HELM")
 	return present && val == "true"

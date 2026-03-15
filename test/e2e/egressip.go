@@ -3727,3 +3727,347 @@ spec:
 		},
 	),
 )
+
+var _ = ginkgo.Describe("e2e egress gateway", feature.EgressIP, func() {
+	f := wrappedTestFramework("egress-gateway")
+
+	ginkgo.It("pod without EgressIP should egress through egress-assignable node", func() {
+		if !isEgressGatewayEnabled() {
+			e2eskipper.Skipf("Egress Gateway is not enabled")
+		}
+
+		nodes, err := e2enode.GetBoundedReadySchedulableNodes(context.TODO(), f.ClientSet, 3)
+		framework.ExpectNoError(err)
+		if len(nodes.Items) < 2 {
+			framework.Failf("Test requires >= 2 Ready nodes, but there are only %v nodes", len(nodes.Items))
+		}
+
+		podNodeName := nodes.Items[0].Name
+		podNodeIP := e2enode.GetAddresses(&nodes.Items[0], corev1.NodeInternalIP)[0]
+		egressNodeName := nodes.Items[1].Name
+		egressNodeIP := e2enode.GetAddresses(&nodes.Items[1], corev1.NodeInternalIP)[0]
+
+		ginkgo.By(fmt.Sprintf("Label node %s as egress-assignable", egressNodeName))
+		labelNodeForEgress(f, egressNodeName)
+		defer unlabelNodeForEgress(f, egressNodeName)
+
+		ginkgo.By("Create an external container to receive traffic")
+		providerCtx := infraprovider.Get().NewTestContext()
+		primaryProviderNetwork, err := infraprovider.Get().PrimaryNetwork()
+		framework.ExpectNoError(err, "failed to get primary provider network")
+		extContainerPort := infraprovider.Get().GetExternalContainerPort()
+		extContainerSpec := infraapi.ExternalContainer{
+			Name:    "egw-target",
+			Image:   images.AgnHost(),
+			Network: primaryProviderNetwork,
+			CmdArgs: getAgnHostHTTPPortBindCMDArgs(extContainerPort),
+			ExtPort: extContainerPort,
+		}
+		extContainer, err := providerCtx.CreateExternalContainer(extContainerSpec)
+		framework.ExpectNoError(err, "failed to create external container")
+
+		ginkgo.By(fmt.Sprintf("Create a pod on the non-egress node %s", podNodeName))
+		podName := "e2e-egw-pod"
+		_, err = createGenericPodWithLabel(f, podName, podNodeName, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(8080), map[string]string{})
+		framework.ExpectNoError(err, "failed to create pod %s/%s", f.Namespace.Name, podName)
+
+		ginkgo.By(fmt.Sprintf("Verify traffic exits via egress node IP %s and not pod node IP %s", egressNodeIP, podNodeIP))
+		err = wait.PollImmediate(retryInterval, retryTimeout, targetExternalContainerAndTest(
+			extContainer, f.Namespace.Name, podName, true, []string{egressNodeIP}))
+		framework.ExpectNoError(err, "expected source IP to be egress node IP %s", egressNodeIP)
+	})
+
+	ginkgo.It("east-west pod-to-pod traffic should not be affected", func() {
+		if !isEgressGatewayEnabled() {
+			e2eskipper.Skipf("Egress Gateway is not enabled")
+		}
+
+		nodes, err := e2enode.GetBoundedReadySchedulableNodes(context.TODO(), f.ClientSet, 3)
+		framework.ExpectNoError(err)
+		if len(nodes.Items) < 2 {
+			framework.Failf("Test requires >= 2 Ready nodes, but there are only %v nodes", len(nodes.Items))
+		}
+
+		egressNodeName := nodes.Items[1].Name
+		ginkgo.By(fmt.Sprintf("Label node %s as egress-assignable", egressNodeName))
+		labelNodeForEgress(f, egressNodeName)
+		defer unlabelNodeForEgress(f, egressNodeName)
+
+		ginkgo.By("Create server pod on node 0")
+		serverPodName := "e2e-egw-server"
+		serverPod, err := createGenericPodWithLabel(f, serverPodName, nodes.Items[0].Name, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(8080), map[string]string{})
+		framework.ExpectNoError(err)
+		serverPodIP := serverPod.Status.PodIP
+		gomega.Expect(serverPodIP).NotTo(gomega.BeEmpty())
+
+		ginkgo.By("Create client pod on node 1")
+		clientPodName := "e2e-egw-client"
+		_, err = createGenericPodWithLabel(f, clientPodName, nodes.Items[1].Name, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(8081), map[string]string{})
+		framework.ExpectNoError(err)
+
+		ginkgo.By(fmt.Sprintf("Verify client pod can reach server pod at %s and source IP is the client pod IP (not egress node IP)", serverPodIP))
+		err = wait.PollImmediate(retryInterval, retryTimeout, func() (bool, error) {
+			stdout, err := e2ekubectl.RunKubectl(f.Namespace.Name, "exec", clientPodName, "--",
+				"curl", "--connect-timeout", "2", net.JoinHostPort(serverPodIP, "8080")+"/clientip")
+			if err != nil {
+				return false, nil
+			}
+			// The source IP seen by the server should be the client pod IP, not the egress node IP
+			egressNodeIP := e2enode.GetAddresses(&nodes.Items[1], corev1.NodeInternalIP)[0]
+			if strings.Contains(stdout, egressNodeIP) {
+				framework.Logf("ERROR: source IP is egress node IP %s, expected client pod IP", egressNodeIP)
+				return false, fmt.Errorf("pod-to-pod traffic should not go through egress node")
+			}
+			return true, nil
+		})
+		framework.ExpectNoError(err, "pod-to-pod traffic should work without being rerouted through egress node")
+	})
+
+	ginkgo.It("pod-to-node traffic should not be affected", func() {
+		if !isEgressGatewayEnabled() {
+			e2eskipper.Skipf("Egress Gateway is not enabled")
+		}
+
+		nodes, err := e2enode.GetBoundedReadySchedulableNodes(context.TODO(), f.ClientSet, 3)
+		framework.ExpectNoError(err)
+		if len(nodes.Items) < 2 {
+			framework.Failf("Test requires >= 2 Ready nodes, but there are only %v nodes", len(nodes.Items))
+		}
+
+		podNodeName := nodes.Items[0].Name
+		targetNodeName := nodes.Items[1].Name
+		targetNodeIP := e2enode.GetAddresses(&nodes.Items[1], corev1.NodeInternalIP)[0]
+
+		ginkgo.By(fmt.Sprintf("Label node %s as egress-assignable", targetNodeName))
+		labelNodeForEgress(f, targetNodeName)
+		defer unlabelNodeForEgress(f, targetNodeName)
+
+		ginkgo.By(fmt.Sprintf("Create a pod on node %s", podNodeName))
+		podName := "e2e-egw-node-test"
+		_, err = createGenericPodWithLabel(f, podName, podNodeName, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(8080), map[string]string{})
+		framework.ExpectNoError(err)
+
+		ginkgo.By(fmt.Sprintf("Verify pod can reach node %s at %s", targetNodeName, targetNodeIP))
+		err = wait.PollImmediate(retryInterval, retryTimeout, func() (bool, error) {
+			_, err := e2ekubectl.RunKubectl(f.Namespace.Name, "exec", podName, "--",
+				"curl", "--connect-timeout", "2", "-k", fmt.Sprintf("https://%s:10250/healthz", targetNodeIP))
+			return err == nil, nil
+		})
+		framework.ExpectNoError(err, "pod should be able to reach node IP %s directly", targetNodeIP)
+	})
+
+	ginkgo.It("pod-to-ClusterIP service traffic should not be affected", func() {
+		if !isEgressGatewayEnabled() {
+			e2eskipper.Skipf("Egress Gateway is not enabled")
+		}
+
+		nodes, err := e2enode.GetBoundedReadySchedulableNodes(context.TODO(), f.ClientSet, 3)
+		framework.ExpectNoError(err)
+		if len(nodes.Items) < 2 {
+			framework.Failf("Test requires >= 2 Ready nodes, but there are only %v nodes", len(nodes.Items))
+		}
+
+		egressNodeName := nodes.Items[1].Name
+		ginkgo.By(fmt.Sprintf("Label node %s as egress-assignable", egressNodeName))
+		labelNodeForEgress(f, egressNodeName)
+		defer unlabelNodeForEgress(f, egressNodeName)
+
+		ginkgo.By("Create backend pod with label")
+		backendLabel := map[string]string{"app": "egw-svc-backend"}
+		backendPodName := "e2e-egw-svc-backend"
+		_, err = createGenericPodWithLabel(f, backendPodName, nodes.Items[0].Name, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(8080), backendLabel)
+		framework.ExpectNoError(err)
+
+		ginkgo.By("Create ClusterIP service")
+		serviceIP, err := createServiceForPodsWithLabel(f, f.Namespace.Name, 80, 8080, "ClusterIP", backendLabel)
+		framework.ExpectNoError(err)
+		gomega.Expect(serviceIP).NotTo(gomega.BeEmpty())
+
+		ginkgo.By("Create client pod on a different node")
+		clientPodName := "e2e-egw-svc-client"
+		_, err = createGenericPodWithLabel(f, clientPodName, nodes.Items[1].Name, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(8081), map[string]string{})
+		framework.ExpectNoError(err)
+
+		ginkgo.By(fmt.Sprintf("Verify client pod can reach ClusterIP service at %s", serviceIP))
+		err = wait.PollImmediate(retryInterval, retryTimeout, func() (bool, error) {
+			_, err := e2ekubectl.RunKubectl(f.Namespace.Name, "exec", clientPodName, "--",
+				"curl", "--connect-timeout", "2", net.JoinHostPort(serviceIP, "80")+"/clientip")
+			return err == nil, nil
+		})
+		framework.ExpectNoError(err, "pod should be able to reach ClusterIP service at %s", serviceIP)
+	})
+
+	ginkgo.It("ECMP: traffic egresses via one of multiple egress-assignable nodes", func() {
+		if !isEgressGatewayEnabled() {
+			e2eskipper.Skipf("Egress Gateway is not enabled")
+		}
+
+		nodes, err := e2enode.GetBoundedReadySchedulableNodes(context.TODO(), f.ClientSet, 3)
+		framework.ExpectNoError(err)
+		if len(nodes.Items) < 3 {
+			framework.Failf("Test requires >= 3 Ready nodes, but there are only %v nodes", len(nodes.Items))
+		}
+
+		podNodeName := nodes.Items[0].Name
+		podNodeIP := e2enode.GetAddresses(&nodes.Items[0], corev1.NodeInternalIP)[0]
+		egressNode1Name := nodes.Items[1].Name
+		egressNode1IP := e2enode.GetAddresses(&nodes.Items[1], corev1.NodeInternalIP)[0]
+		egressNode2Name := nodes.Items[2].Name
+		egressNode2IP := e2enode.GetAddresses(&nodes.Items[2], corev1.NodeInternalIP)[0]
+
+		ginkgo.By(fmt.Sprintf("Label nodes %s and %s as egress-assignable", egressNode1Name, egressNode2Name))
+		labelNodeForEgress(f, egressNode1Name)
+		defer unlabelNodeForEgress(f, egressNode1Name)
+		labelNodeForEgress(f, egressNode2Name)
+		defer unlabelNodeForEgress(f, egressNode2Name)
+
+		ginkgo.By("Create an external container to receive traffic")
+		providerCtx := infraprovider.Get().NewTestContext()
+		primaryProviderNetwork, err := infraprovider.Get().PrimaryNetwork()
+		framework.ExpectNoError(err, "failed to get primary provider network")
+		extContainerPort := infraprovider.Get().GetExternalContainerPort()
+		extContainerSpec := infraapi.ExternalContainer{
+			Name:    "egw-ecmp-target",
+			Image:   images.AgnHost(),
+			Network: primaryProviderNetwork,
+			CmdArgs: getAgnHostHTTPPortBindCMDArgs(extContainerPort),
+			ExtPort: extContainerPort,
+		}
+		extContainer, err := providerCtx.CreateExternalContainer(extContainerSpec)
+		framework.ExpectNoError(err, "failed to create external container")
+
+		ginkgo.By(fmt.Sprintf("Create a pod on non-egress node %s", podNodeName))
+		podName := "e2e-egw-ecmp-pod"
+		_, err = createGenericPodWithLabel(f, podName, podNodeName, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(8080), map[string]string{})
+		framework.ExpectNoError(err)
+
+		ginkgo.By(fmt.Sprintf("Verify traffic exits via one of the egress node IPs (%s or %s), not the pod's local node IP %s", egressNode1IP, egressNode2IP, podNodeIP))
+		err = wait.PollImmediate(retryInterval, retryTimeout, func() (bool, error) {
+			targetIP := extContainer.GetIPv4()
+			if targetIP == "" {
+				targetIP = extContainer.GetIPv6()
+			}
+			url := net.JoinHostPort(targetIP, extContainer.GetPortStr()) + "/clientip"
+			stdout, err := e2ekubectl.RunKubectl(f.Namespace.Name, "exec", podName, "--",
+				"curl", "--connect-timeout", "2", url)
+			if err != nil {
+				return false, nil
+			}
+			if strings.Contains(stdout, podNodeIP) {
+				framework.Logf("ERROR: source IP is pod's local node IP %s, traffic was not steered", podNodeIP)
+				return false, fmt.Errorf("traffic should be steered through an egress node, not exit via local node")
+			}
+			if strings.Contains(stdout, egressNode1IP) || strings.Contains(stdout, egressNode2IP) {
+				return true, nil
+			}
+			framework.Logf("Unexpected source IP in response: %s", stdout)
+			return false, nil
+		})
+		framework.ExpectNoError(err, "expected source IP to be one of the egress node IPs (%s or %s)", egressNode1IP, egressNode2IP)
+	})
+
+	ginkgo.It("failover: traffic should shift when egress-assignable label is removed", func() {
+		if !isEgressGatewayEnabled() {
+			e2eskipper.Skipf("Egress Gateway is not enabled")
+		}
+
+		nodes, err := e2enode.GetBoundedReadySchedulableNodes(context.TODO(), f.ClientSet, 3)
+		framework.ExpectNoError(err)
+		if len(nodes.Items) < 3 {
+			framework.Failf("Test requires >= 3 Ready nodes, but there are only %v nodes", len(nodes.Items))
+		}
+
+		podNodeName := nodes.Items[0].Name
+		egressNode1Name := nodes.Items[1].Name
+		egressNode1IP := e2enode.GetAddresses(&nodes.Items[1], corev1.NodeInternalIP)[0]
+		egressNode2Name := nodes.Items[2].Name
+		egressNode2IP := e2enode.GetAddresses(&nodes.Items[2], corev1.NodeInternalIP)[0]
+
+		ginkgo.By(fmt.Sprintf("Label node %s as egress-assignable", egressNode1Name))
+		labelNodeForEgress(f, egressNode1Name)
+
+		ginkgo.By("Create an external container to receive traffic")
+		providerCtx := infraprovider.Get().NewTestContext()
+		primaryProviderNetwork, err := infraprovider.Get().PrimaryNetwork()
+		framework.ExpectNoError(err, "failed to get primary provider network")
+		extContainerPort := infraprovider.Get().GetExternalContainerPort()
+		extContainerSpec := infraapi.ExternalContainer{
+			Name:    "egw-failover-target",
+			Image:   images.AgnHost(),
+			Network: primaryProviderNetwork,
+			CmdArgs: getAgnHostHTTPPortBindCMDArgs(extContainerPort),
+			ExtPort: extContainerPort,
+		}
+		extContainer, err := providerCtx.CreateExternalContainer(extContainerSpec)
+		framework.ExpectNoError(err, "failed to create external container")
+
+		ginkgo.By(fmt.Sprintf("Create a pod on non-egress node %s", podNodeName))
+		podName := "e2e-egw-failover-pod"
+		_, err = createGenericPodWithLabel(f, podName, podNodeName, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(8080), map[string]string{})
+		framework.ExpectNoError(err)
+
+		ginkgo.By(fmt.Sprintf("Verify traffic exits via egress node %s IP %s", egressNode1Name, egressNode1IP))
+		err = wait.PollImmediate(retryInterval, retryTimeout, targetExternalContainerAndTest(
+			extContainer, f.Namespace.Name, podName, true, []string{egressNode1IP}))
+		framework.ExpectNoError(err, "expected source IP to be %s", egressNode1IP)
+
+		ginkgo.By(fmt.Sprintf("Label node %s as egress-assignable and remove label from node %s", egressNode2Name, egressNode1Name))
+		labelNodeForEgress(f, egressNode2Name)
+		defer unlabelNodeForEgress(f, egressNode2Name)
+		unlabelNodeForEgress(f, egressNode1Name)
+
+		ginkgo.By(fmt.Sprintf("Verify traffic now exits via egress node %s IP %s", egressNode2Name, egressNode2IP))
+		err = wait.PollImmediate(retryInterval, retryTimeout, targetExternalContainerAndTest(
+			extContainer, f.Namespace.Name, podName, true, []string{egressNode2IP}))
+		framework.ExpectNoError(err, "expected source IP to be %s after failover", egressNode2IP)
+	})
+
+	ginkgo.It("pod should egress via local node when no egress-assignable nodes exist", func() {
+		if !isEgressGatewayEnabled() {
+			e2eskipper.Skipf("Egress Gateway is not enabled")
+		}
+
+		nodes, err := e2enode.GetBoundedReadySchedulableNodes(context.TODO(), f.ClientSet, 3)
+		framework.ExpectNoError(err)
+		if len(nodes.Items) < 2 {
+			framework.Failf("Test requires >= 2 Ready nodes, but there are only %v nodes", len(nodes.Items))
+		}
+
+		podNodeName := nodes.Items[0].Name
+		podNodeIP := e2enode.GetAddresses(&nodes.Items[0], corev1.NodeInternalIP)[0]
+
+		ginkgo.By("Create an external container to receive traffic (no egress-assignable nodes)")
+		providerCtx := infraprovider.Get().NewTestContext()
+		primaryProviderNetwork, err := infraprovider.Get().PrimaryNetwork()
+		framework.ExpectNoError(err, "failed to get primary provider network")
+		extContainerPort := infraprovider.Get().GetExternalContainerPort()
+		extContainerSpec := infraapi.ExternalContainer{
+			Name:    "egw-noegress-target",
+			Image:   images.AgnHost(),
+			Network: primaryProviderNetwork,
+			CmdArgs: getAgnHostHTTPPortBindCMDArgs(extContainerPort),
+			ExtPort: extContainerPort,
+		}
+		extContainer, err := providerCtx.CreateExternalContainer(extContainerSpec)
+		framework.ExpectNoError(err, "failed to create external container")
+
+		ginkgo.By(fmt.Sprintf("Create a pod on node %s", podNodeName))
+		podName := "e2e-egw-noegress-pod"
+		_, err = createGenericPodWithLabel(f, podName, podNodeName, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(8080), map[string]string{})
+		framework.ExpectNoError(err)
+
+		ginkgo.By(fmt.Sprintf("Verify traffic exits via pod's local node IP %s (no steering)", podNodeIP))
+		err = wait.PollImmediate(retryInterval, retryTimeout, targetExternalContainerAndTest(
+			extContainer, f.Namespace.Name, podName, true, []string{podNodeIP}))
+		framework.ExpectNoError(err, "expected source IP to be pod's local node IP %s when no egress nodes exist", podNodeIP)
+	})
+})
