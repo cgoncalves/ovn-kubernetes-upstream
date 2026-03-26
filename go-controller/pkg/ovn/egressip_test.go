@@ -90,6 +90,101 @@ type nodeInfo struct {
 
 var egressPodLabel = map[string]string{"egress": "needed"}
 
+var _ = ginkgo.Describe("EgressIP TrafficSelector helper functions", func() {
+
+	ginkgo.Context("hasTrafficSelector", func() {
+		ginkgo.It("returns false for empty TrafficSelector", func() {
+			spec := egressipv1.EgressIPSpec{}
+			gomega.Expect(hasTrafficSelector(spec)).To(gomega.BeFalse())
+		})
+
+		ginkgo.It("returns true when MatchLabels is set", func() {
+			spec := egressipv1.EgressIPSpec{
+				TrafficSelector: metav1.LabelSelector{
+					MatchLabels: map[string]string{"traffic-group": "net1"},
+				},
+			}
+			gomega.Expect(hasTrafficSelector(spec)).To(gomega.BeTrue())
+		})
+
+		ginkgo.It("returns true when MatchExpressions is set", func() {
+			spec := egressipv1.EgressIPSpec{
+				TrafficSelector: metav1.LabelSelector{
+					MatchExpressions: []metav1.LabelSelectorRequirement{
+						{Key: "traffic-group", Operator: metav1.LabelSelectorOpIn, Values: []string{"net1"}},
+					},
+				},
+			}
+			gomega.Expect(hasTrafficSelector(spec)).To(gomega.BeTrue())
+		})
+	})
+
+	ginkgo.Context("egressStatuses.containsAny", func() {
+		ginkgo.It("returns false for empty statuses", func() {
+			es := egressStatuses{statusMap: map[egressipv1.EgressIPStatusItem]string{}}
+			gomega.Expect(es.containsAny([]egressipv1.EgressIPStatusItem{
+				{Node: "node1", EgressIP: "1.2.3.4"},
+			})).To(gomega.BeFalse())
+		})
+
+		ginkgo.It("returns true when a matching status exists", func() {
+			status := egressipv1.EgressIPStatusItem{Node: "node1", EgressIP: "1.2.3.4"}
+			es := egressStatuses{statusMap: map[egressipv1.EgressIPStatusItem]string{status: ""}}
+			gomega.Expect(es.containsAny([]egressipv1.EgressIPStatusItem{
+				{Node: "node2", EgressIP: "5.6.7.8"},
+				status,
+			})).To(gomega.BeTrue())
+		})
+
+		ginkgo.It("returns false when no matching status exists", func() {
+			es := egressStatuses{statusMap: map[egressipv1.EgressIPStatusItem]string{
+				{Node: "node1", EgressIP: "1.2.3.4"}: "",
+			}}
+			gomega.Expect(es.containsAny([]egressipv1.EgressIPStatusItem{
+				{Node: "node2", EgressIP: "5.6.7.8"},
+			})).To(gomega.BeFalse())
+		})
+	})
+
+	ginkgo.Context("LRP match parsing for syncStaleEgressReroutePolicy", func() {
+		ginkgo.It("extracts pod IP from standard match", func() {
+			match := "ip4.src == 10.244.1.6"
+			splitMatch := strings.Split(match, " ")
+			gomega.Expect(len(splitMatch)).To(gomega.BeNumerically(">=", 3))
+			podIP := net.ParseIP(splitMatch[2])
+			gomega.Expect(podIP).NotTo(gomega.BeNil())
+			gomega.Expect(podIP.String()).To(gomega.Equal("10.244.1.6"))
+		})
+
+		ginkgo.It("extracts pod IP from destination-filtered match", func() {
+			match := "ip4.src == 10.244.1.6 && ip4.dst == $a4776992171281246630"
+			splitMatch := strings.Split(match, " ")
+			gomega.Expect(len(splitMatch)).To(gomega.BeNumerically(">=", 3))
+			podIP := net.ParseIP(splitMatch[2])
+			gomega.Expect(podIP).NotTo(gomega.BeNil())
+			gomega.Expect(podIP.String()).To(gomega.Equal("10.244.1.6"))
+			// The last element should be the address set hash, not a valid IP
+			lastElement := splitMatch[len(splitMatch)-1]
+			gomega.Expect(net.ParseIP(lastElement)).To(gomega.BeNil())
+		})
+
+		ginkgo.It("rejects match with fewer than 3 tokens", func() {
+			match := "ip4.src"
+			splitMatch := strings.Split(match, " ")
+			gomega.Expect(len(splitMatch)).To(gomega.BeNumerically("<", 3))
+		})
+
+		ginkgo.It("extracts pod IP from IPv6 destination-filtered match", func() {
+			match := "ip6.src == fd46::1 && ip6.dst == $a1234567890"
+			splitMatch := strings.Split(match, " ")
+			gomega.Expect(len(splitMatch)).To(gomega.BeNumerically(">=", 3))
+			podIP := net.ParseIP(splitMatch[2])
+			gomega.Expect(podIP).NotTo(gomega.BeNil())
+			gomega.Expect(podIP.String()).To(gomega.Equal("fd46::1"))
+		})
+	})
+})
+
 var _ = ginkgo.Describe("OVN master EgressIP Operations cluster default network", func() {
 	var (
 		app     *cli.App
