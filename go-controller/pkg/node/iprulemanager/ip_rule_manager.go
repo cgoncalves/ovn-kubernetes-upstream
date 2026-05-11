@@ -223,8 +223,27 @@ func areNetlinkRulesEqual(r1, r2 *netlink.Rule) bool {
 	if r1.Mark != r2.Mark {
 		return false
 	}
+	if r1.IPProto != r2.IPProto {
+		return false
+	}
+	if !areRulePortRangesEqual(r1.Dport, r2.Dport) {
+		return false
+	}
+	if !areRulePortRangesEqual(r1.Sport, r2.Sport) {
+		return false
+	}
 
 	return areIPNetsEqual(r1.Src, r2.Src) && areIPNetsEqual(r1.Dst, r2.Dst)
+}
+
+func areRulePortRangesEqual(p1, p2 *netlink.RulePortRange) bool {
+	if p1 == nil && p2 == nil {
+		return true
+	}
+	if p1 == nil || p2 == nil {
+		return false
+	}
+	return p1.Start == p2.Start && p1.End == p2.End
 }
 
 func areIPNetsEqual(n1, n2 *net.IPNet) bool {

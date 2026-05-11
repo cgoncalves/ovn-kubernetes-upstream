@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,7 +49,7 @@ import (
 	"github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/syncmap"
 	"github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/types"
 	"github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/util"
-	"github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/util/egressip"
+	egressiputil "github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/util/egressip"
 	utilerrors "github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/util/errors"
 )
 
@@ -599,10 +600,10 @@ func (c *Controller) getConfigAndUpdateRefs(eIP *eipv1.EgressIP, updateRefs bool
 // processEIP attempts to find namespaces and pods that match the EIP selectors and then attempts to find a network
 // that can host one of the EIP IPs returning egress IP configuration, selected namespaces and pods
 
-// getDestinationNetworksForEIP returns the parsed destination network CIDRs for an EgressIP
+// getTrafficMatchersForEIP returns the parsed traffic matchers for an EgressIP
 // based on its TrafficSelector. The returned bool indicates whether a TrafficSelector is set,
 // distinguishing "no selector" (false, nil) from "selector with zero matches" (true, nil).
-func (c *Controller) getDestinationNetworksForEIP(eip *eipv1.EgressIP) ([]*net.IPNet, bool, error) {
+func (c *Controller) getTrafficMatchersForEIP(eip *eipv1.EgressIP) ([]*egressiputil.ParsedTrafficMatcher, bool, error) {
 	if len(eip.Spec.TrafficSelector.MatchLabels) == 0 && len(eip.Spec.TrafficSelector.MatchExpressions) == 0 {
 		return nil, false, nil
 	}
@@ -620,18 +621,16 @@ func (c *Controller) getDestinationNetworksForEIP(eip *eipv1.EgressIP) ([]*net.I
 	if err != nil {
 		return nil, true, fmt.Errorf("failed to list EgressIPTraffic by selector for EgressIP %s: %v", eip.Name, err)
 	}
-	var destNetworks []*net.IPNet
+	var allMatchers []*egressiputil.ParsedTrafficMatcher
 	for _, eipt := range egressIPTraffics {
-		for _, matcher := range eipt.Spec.TrafficMatchers {
-			_, ipNet, err := net.ParseCIDR(matcher.CIDR)
-			if err != nil {
-				klog.Warningf("Failed to parse destination network CIDR %s from EgressIPTraffic %s: %v", matcher.CIDR, eipt.Name, err)
-				continue
-			}
-			destNetworks = append(destNetworks, ipNet)
+		parsed, err := egressiputil.ParseTrafficMatchers(eipt.Spec.TrafficMatchers)
+		if err != nil {
+			klog.Warningf("Failed to parse traffic matchers from EgressIPTraffic %s: %v", eipt.Name, err)
+			continue
 		}
+		allMatchers = append(allMatchers, parsed...)
 	}
-	return destNetworks, true, nil
+	return allMatchers, true, nil
 }
 
 func (c *Controller) processEIP(eip *eipv1.EgressIP) (*eIPConfig, sets.Set[string], sets.Set[ktypes.NamespacedName],
@@ -671,14 +670,14 @@ func (c *Controller) processEIP(eip *eipv1.EgressIP) (*eIPConfig, sets.Set[strin
 		if err != nil {
 			return nil, selectedNamespaces, selectedPods, selectedNamespacesPodIPs, fmt.Errorf("failed to list namespaces: %w", err)
 		}
-		destNetworks, hasTrafficSelector, err := c.getDestinationNetworksForEIP(eip)
+		trafficMatchers, hasTrafficSelector, err := c.getTrafficMatchersForEIP(eip)
 		if err != nil {
-			return nil, selectedNamespaces, selectedPods, selectedNamespacesPodIPs, fmt.Errorf("failed to get destination networks for EgressIP %s: %v", eip.Name, err)
+			return nil, selectedNamespaces, selectedPods, selectedNamespacesPodIPs, fmt.Errorf("failed to get traffic matchers for EgressIP %s: %v", eip.Name, err)
 		}
-		// When TrafficSelector is set but matches no destination networks, skip programming
+		// When TrafficSelector is set but matches no traffic matchers, skip programming
 		// entirely — the OVN controller's empty address set will ensure no traffic is rerouted.
-		if hasTrafficSelector && len(destNetworks) == 0 {
-			klog.V(4).Infof("EgressIP %s has TrafficSelector but no matching destination networks, skipping node-side programming", eip.Name)
+		if hasTrafficSelector && len(trafficMatchers) == 0 {
+			klog.V(4).Infof("EgressIP %s has TrafficSelector but no matching traffic matchers, skipping node-side programming", eip.Name)
 			break
 		}
 		isEIPV6 := utilnet.IsIPv6(ip)
@@ -718,13 +717,13 @@ func (c *Controller) processEIP(eip *eipv1.EgressIP) (*eIPConfig, sets.Set[strin
 				if selectedNamespacesPodIPs[namespace.Name] == nil {
 					selectedNamespacesPodIPs[namespace.Name] = make(map[ktypes.NamespacedName]*podIPConfigList)
 				}
-				selectedNamespacesPodIPs[namespace.Name][podNamespaceName] = generatePodConfigWithDestNetworks(ips, link, ip, isEIPV6, destNetworks)
+				selectedNamespacesPodIPs[namespace.Name][podNamespaceName] = generatePodConfigWithMatchers(ips, link, ip, isEIPV6, trafficMatchers)
 				selectedPods.Insert(podNamespaceName)
 			}
 		}
 		// ensure at least one pod is selected before generating config
 		if len(selectedNamespacesPodIPs) > 0 {
-			eipSpecificConfig, err = generateEIPConfig(link, ip, isEIPV6, destNetworks)
+			eipSpecificConfig, err = generateEIPConfig(link, ip, isEIPV6, egressiputil.UniqueCIDRs(trafficMatchers))
 			if err != nil {
 				return nil, selectedNamespaces, selectedPods, selectedNamespacesPodIPs,
 					fmt.Errorf("failed to generate EIP configuration for EgressIP %s IP %s: %v", eip.Name, status.EgressIP, err)
@@ -736,25 +735,25 @@ func (c *Controller) processEIP(eip *eipv1.EgressIP) (*eIPConfig, sets.Set[strin
 	return eipSpecificConfig, selectedNamespaces, selectedPods, selectedNamespacesPodIPs, nil
 }
 
-// generatePodConfigWithDestNetworks generates pod IP configurations. When destNetworks is non-empty,
-// it creates one IP rule per pod IP per destination network CIDR, implementing per-destination EgressIP.
-// Non-matching destination traffic falls through to the main routing table since the per-EgressIP
-// routing table only contains destination-specific routes (no default route).
-// When destNetworks is nil or empty, it creates one IP rule per pod IP (matching all destinations).
-func generatePodConfigWithDestNetworks(podIPs []net.IP, link netlink.Link, eIP net.IP, isEIPV6 bool, destNetworks []*net.IPNet) *podIPConfigList {
+// generatePodConfigWithMatchers generates pod IP configurations. When matchers is non-empty,
+// it creates one IP rule per pod IP per traffic matcher, implementing per-destination EgressIP
+// with optional L4 protocol/port filtering. Non-matching traffic falls through to the main
+// routing table since the per-EgressIP routing table only contains destination-specific routes.
+// When matchers is nil or empty, it creates one IP rule per pod IP (matching all destinations).
+func generatePodConfigWithMatchers(podIPs []net.IP, link netlink.Link, eIP net.IP, isEIPV6 bool, matchers []*egressiputil.ParsedTrafficMatcher) *podIPConfigList {
 	newPodIPConfigs := newPodIPConfigList()
 	for _, podIP := range podIPs {
 		isPodIPv6 := utilnet.IsIPv6(podIP)
 		if isPodIPv6 != isEIPV6 {
 			continue
 		}
-		if len(destNetworks) > 0 {
-			// Create one IP rule per destination network CIDR.
-			// The iptables SNAT rule is identical for all destinations (same source, interface, SNAT IP),
+		if len(matchers) > 0 {
+			// Create one IP rule per traffic matcher.
+			// The iptables SNAT rule is identical for all matchers (same source, interface, SNAT IP),
 			// so it is only attached to the first config to avoid duplicate add/delete issues.
 			snatRuleAssigned := false
-			for _, destCIDR := range destNetworks {
-				if utilnet.IsIPv6CIDR(destCIDR) != isPodIPv6 {
+			for _, matcher := range matchers {
+				if utilnet.IsIPv6CIDR(matcher.CIDR) != isPodIPv6 {
 					continue
 				}
 				ipConfig := newPodIPConfig()
@@ -762,7 +761,7 @@ func generatePodConfigWithDestNetworks(podIPs []net.IP, link netlink.Link, eIP n
 					ipConfig.ipTableRule = generateIPTablesSNATRuleArg(podIP, isPodIPv6, link.Attrs().Name, eIP.String())
 					snatRuleAssigned = true
 				}
-				ipConfig.ipRule = generateIPRuleWithDst(podIP, isPodIPv6, link.Attrs().Index, destCIDR)
+				ipConfig.ipRule = generateIPRuleForMatcher(podIP, isPodIPv6, link.Attrs().Index, matcher)
 				ipConfig.v6 = isPodIPv6
 				newPodIPConfigs.elems = append(newPodIPConfigs.elems, ipConfig)
 			}
@@ -793,7 +792,7 @@ func generateEIPConfig(link netlink.Link, eIP net.IP, isEIPV6 bool, destNetworks
 		linkRoutes = replaceDefaultRouteWithDestNetworks(linkRoutes, link.Attrs().Index, destNetworks, isEIPV6)
 	}
 	eipConfig.routes = linkRoutes
-	eipConfig.addr = egressip.GetNetlinkAddress(eIP, link.Attrs().Index)
+	eipConfig.addr = egressiputil.GetNetlinkAddress(eIP, link.Attrs().Index)
 	return eipConfig, nil
 }
 
@@ -1164,7 +1163,7 @@ func (c *Controller) repairNode() error {
 			return fmt.Errorf("failed to list IP rules at priority %d: %v", priority, err)
 		}
 		for _, existingRule := range existingRules {
-			ruleStr := existingRule.String()
+			ruleStr := ruleKey(existingRule)
 			assignedIPRules.Insert(ruleStr)
 			assignedIPRulesStrToRules[ruleStr] = existingRule
 		}
@@ -1231,11 +1230,11 @@ func (c *Controller) repairNode() error {
 			}
 			linkIdx := link.Attrs().Index
 			linkName := link.Attrs().Name
-			destNetworks, hasTrafficSelector, err := c.getDestinationNetworksForEIP(egressIP)
+			trafficMatchers, hasTrafficSelector, err := c.getTrafficMatchersForEIP(egressIP)
 			if err != nil {
-				return fmt.Errorf("failed to get destination networks for EgressIP %s: %v", egressIP.Name, err)
+				return fmt.Errorf("failed to get traffic matchers for EgressIP %s: %v", egressIP.Name, err)
 			}
-			if hasTrafficSelector && len(destNetworks) == 0 {
+			if hasTrafficSelector && len(trafficMatchers) == 0 {
 				continue
 			}
 			// copy routes associated with link to new route table
@@ -1244,8 +1243,9 @@ func (c *Controller) repairNode() error {
 				return fmt.Errorf("failed to generate IP routes for link %s for EgressIP %s IP %s: %v", linkName,
 					egressIP.Name, eIPNet.IP.String(), err)
 			}
-			if len(destNetworks) > 0 {
-				linkRoutes = replaceDefaultRouteWithDestNetworks(linkRoutes, linkIdx, destNetworks, isEIPV6)
+			destCIDRs := egressiputil.UniqueCIDRs(trafficMatchers)
+			if len(destCIDRs) > 0 {
+				linkRoutes = replaceDefaultRouteWithDestNetworks(linkRoutes, linkIdx, destCIDRs, isEIPV6)
 			}
 			for _, route := range linkRoutes {
 				expectedIPRoutes.Insert(route.String())
@@ -1306,15 +1306,15 @@ func (c *Controller) repairNode() error {
 							} else {
 								expectedIPTableV4Rules.Insert(ipTableRule)
 							}
-							if len(destNetworks) > 0 {
-								for _, destCIDR := range destNetworks {
-									if utilnet.IsIPv6CIDR(destCIDR) != isPodIPV6 {
+							if len(trafficMatchers) > 0 {
+								for _, matcher := range trafficMatchers {
+									if utilnet.IsIPv6CIDR(matcher.CIDR) != isPodIPV6 {
 										continue
 									}
-									expectedIPRules.Insert(generateIPRuleWithDst(podIP, isPodIPV6, link.Attrs().Index, destCIDR).String())
+									expectedIPRules.Insert(ruleKey(generateIPRuleForMatcher(podIP, isPodIPV6, link.Attrs().Index, matcher)))
 								}
 							} else {
-								expectedIPRules.Insert(generateIPRule(podIP, isPodIPV6, link.Attrs().Index).String())
+								expectedIPRules.Insert(ruleKey(generateIPRule(podIP, isPodIPV6, link.Attrs().Index)))
 							}
 						}
 					}
@@ -1783,6 +1783,48 @@ func generateIPRule(srcIP net.IP, isIPv6 bool, ifIndex int) netlink.Rule {
 // from the links 'ifindex'. The dstCIDR sets the destination match for per-destination EgressIP routing.
 func generateIPRuleWithDst(srcIP net.IP, isIPv6 bool, ifIndex int, dstCIDR *net.IPNet) netlink.Rule {
 	return generateIPRuleWithPriorityAndDst(srcIP, isIPv6, ifIndex, ruleEIPTrafficPriority, dstCIDR)
+}
+
+// generateIPRuleForMatcher generates an IP rule from a ParsedTrafficMatcher, including L4 fields
+// (protocol, destination port, source port) when specified in the matcher.
+func generateIPRuleForMatcher(srcIP net.IP, isIPv6 bool, ifIndex int, matcher *egressiputil.ParsedTrafficMatcher) netlink.Rule {
+	r := generateIPRuleWithPriorityAndDst(srcIP, isIPv6, ifIndex, ruleEIPTrafficPriority, matcher.CIDR)
+	if matcher.Protocol != 0 {
+		r.IPProto = matcher.Protocol
+	}
+	if matcher.DstPortStart != 0 {
+		r.Dport = netlink.NewRulePortRange(matcher.DstPortStart, matcher.DstPortEnd)
+	}
+	if matcher.SrcPortStart != 0 {
+		r.Sport = netlink.NewRulePortRange(matcher.SrcPortStart, matcher.SrcPortEnd)
+	}
+	return r
+}
+
+// ruleKey returns a string representation of a netlink.Rule that includes L4 fields
+// (IPProto, Dport, Sport) for use as a map/set key. The standard Rule.String() method
+// does not include these fields, causing rules differing only by protocol/port to appear
+// identical.
+func ruleKey(r netlink.Rule) string {
+	key := r.String()
+	if r.IPProto != 0 {
+		key += " ipproto " + strconv.Itoa(r.IPProto)
+	}
+	if r.Dport != nil {
+		if r.Dport.Start == r.Dport.End {
+			key += " dport " + strconv.Itoa(int(r.Dport.Start))
+		} else {
+			key += " dport " + strconv.Itoa(int(r.Dport.Start)) + "-" + strconv.Itoa(int(r.Dport.End))
+		}
+	}
+	if r.Sport != nil {
+		if r.Sport.Start == r.Sport.End {
+			key += " sport " + strconv.Itoa(int(r.Sport.Start))
+		} else {
+			key += " sport " + strconv.Itoa(int(r.Sport.Start)) + "-" + strconv.Itoa(int(r.Sport.End))
+		}
+	}
+	return key
 }
 
 func generateIPRuleWithPriorityAndDst(srcIP net.IP, isIPv6 bool, ifIndex, priority int, dstCIDR *net.IPNet) netlink.Rule {
