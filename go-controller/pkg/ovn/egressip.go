@@ -52,6 +52,7 @@ import (
 	"github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/syncmap"
 	"github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/types"
 	"github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/util"
+	egressiputil "github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/util/egressip"
 	utilerrors "github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/util/errors"
 )
 
@@ -98,10 +99,10 @@ func hasTrafficSelector(spec egressipv1.EgressIPSpec) bool {
 	return len(spec.TrafficSelector.MatchLabels) > 0 || len(spec.TrafficSelector.MatchExpressions) > 0
 }
 
-// getDestinationNetworksForEgressIP returns the list of destination network CIDRs
-// from all EgressIPTraffic CRs matched by the EgressIP's TrafficSelector.
-// If TrafficSelector is not set, returns nil (meaning all traffic is selected).
-func (e *EgressIPController) getDestinationNetworksForEgressIP(spec egressipv1.EgressIPSpec) ([]string, error) {
+// getTrafficMatchersForEgressIP returns the parsed traffic matchers from all
+// EgressIPTraffic CRs matched by the EgressIP's TrafficSelector.
+// Returns nil if TrafficSelector is not set.
+func (e *EgressIPController) getTrafficMatchersForEgressIP(spec egressipv1.EgressIPSpec) ([]*egressiputil.ParsedTrafficMatcher, error) {
 	if !hasTrafficSelector(spec) {
 		return nil, nil
 	}
@@ -109,13 +110,71 @@ func (e *EgressIPController) getDestinationNetworksForEgressIP(spec egressipv1.E
 	if err != nil {
 		return nil, fmt.Errorf("failed to get EgressIPTraffic CRs by selector: %v", err)
 	}
-	var destNetworks []string
+	var allMatchers []*egressiputil.ParsedTrafficMatcher
 	for _, eipt := range egressIPTraffics {
-		for _, matcher := range eipt.Spec.TrafficMatchers {
-			destNetworks = append(destNetworks, matcher.CIDR)
+		parsed, err := egressiputil.ParseTrafficMatchers(eipt.Spec.TrafficMatchers)
+		if err != nil {
+			klog.Warningf("Failed to parse traffic matchers from EgressIPTraffic %s: %v", eipt.Name, err)
+			continue
+		}
+		allMatchers = append(allMatchers, parsed...)
+	}
+	return allMatchers, nil
+}
+
+// getCIDROnlyDestinations returns CIDR strings from matchers that have no L4 filter,
+// suitable for adding to OVN address sets.
+func getCIDROnlyDestinations(matchers []*egressiputil.ParsedTrafficMatcher) []string {
+	var cidrs []string
+	for _, m := range matchers {
+		if !m.HasL4Filter() {
+			cidrs = append(cidrs, m.CIDR.String())
 		}
 	}
-	return destNetworks, nil
+	return cidrs
+}
+
+// buildL4MatchClauses builds OVN match string clauses for L4-filtered traffic matchers.
+// Each matcher with protocol/port generates a clause like:
+//
+//	(ip4.dst == 10.0.0.0/8 && tcp && tcp.dst == 5060)
+//
+// Port ranges use OVN set notation: tcp.dst == {5060, 5061, ...}
+// Returns empty string if no matchers have L4 filters.
+func buildL4MatchClauses(isIPv6 bool, matchers []*egressiputil.ParsedTrafficMatcher) string {
+	ipFamily := "ip4"
+	if isIPv6 {
+		ipFamily = "ip6"
+	}
+	var clauses []string
+	for _, m := range matchers {
+		if !m.HasL4Filter() {
+			continue
+		}
+		if utilnet.IsIPv6CIDR(m.CIDR) != isIPv6 {
+			continue
+		}
+		proto := m.ProtocolName()
+		clause := fmt.Sprintf("%s.dst == %s && %s", ipFamily, m.CIDR.String(), proto)
+		if m.DstPortStart != 0 {
+			clause += " && " + buildPortMatch(proto+".dst", m.DstPortStart, m.DstPortEnd)
+		}
+		if m.SrcPortStart != 0 {
+			clause += " && " + buildPortMatch(proto+".src", m.SrcPortStart, m.SrcPortEnd)
+		}
+		clauses = append(clauses, "("+clause+")")
+	}
+	return strings.Join(clauses, " || ")
+}
+
+// buildPortMatch builds an OVN port match expression.
+// Single port: "tcp.dst == 5060"
+// Port range:  "tcp.dst == 5060..5062"
+func buildPortMatch(field string, start, end uint16) string {
+	if start == end {
+		return fmt.Sprintf("%s == %d", field, start)
+	}
+	return fmt.Sprintf("%s == %d..%d", field, start, end)
 }
 
 // ensureDestinationNetworksAddressSet creates or updates the destination networks address set
@@ -125,11 +184,14 @@ func (e *EgressIPController) ensureDestinationNetworksAddressSet(egressIPName st
 	if !hasTrafficSelector(spec) {
 		return nil, nil
 	}
-	destNetworks, err := e.getDestinationNetworksForEgressIP(spec)
+	allMatchers, err := e.getTrafficMatchersForEgressIP(spec)
 	if err != nil {
 		return nil, err
 	}
-	if len(destNetworks) == 0 {
+	// Only CIDR-only matchers go into the address set; L4-filtered matchers
+	// are handled via inline OVN match conditions in createReroutePolicyOps.
+	destNetworks := getCIDROnlyDestinations(allMatchers)
+	if len(allMatchers) == 0 {
 		klog.Warningf("EgressIP %s has a TrafficSelector but no matching EgressIPTraffic destination networks were found; "+
 			"traffic will not be routed via this EgressIP until matching EgressIPTraffic resources are created", egressIPName)
 		eIPRef := corev1.ObjectReference{Kind: "EgressIP", Name: egressIPName}
@@ -2895,6 +2957,7 @@ func (e *EgressIPController) addPodEgressIPAssignment(ni util.NetInfo, egressIPN
 	// Only EgressIPs with a trafficSelector get destination-filtered reroute policies
 	// at higher priority. Non-trafficSelector EgressIPs use standard priority.
 	var destAddrSetHashName string
+	var l4MatchClauses string
 	isEgressIPv6 := utilnet.IsIPv6String(status.EgressIP)
 	reroutePriority := types.EgressIPReroutePriority
 	eip, err := e.watchFactory.GetEgressIP(egressIPName)
@@ -2914,6 +2977,11 @@ func (e *EgressIPController) addPodEgressIPAssignment(ni util.NetInfo, egressIPN
 			destAddrSetHashName = v4Name
 		}
 		reroutePriority = types.EgressIPTrafficReroutePriority
+		// Build L4 match clauses for matchers with protocol/port filters
+		allMatchers, err := e.getTrafficMatchersForEgressIP(eip.Spec)
+		if err == nil && len(allMatchers) > 0 {
+			l4MatchClauses = buildL4MatchClauses(isEgressIPv6, allMatchers)
+		}
 	}
 	nextHopIP, err := e.getNextHop(ni, status.Node, status.EgressIP, egressIPName, isLocalZoneEgressNode, isOVNNetwork)
 	if err != nil {
@@ -2951,7 +3019,7 @@ func (e *EgressIPController) addPodEgressIPAssignment(ni util.NetInfo, egressIPN
 			if err != nil {
 				return err
 			}
-			ops, err = e.createReroutePolicyOps(ni, ops, podIPs, status, mark, egressIPName, nextHopIP, routerName, pod.Namespace, pod.Name, destAddrSetHashName, reroutePriority)
+			ops, err = e.createReroutePolicyOps(ni, ops, podIPs, status, mark, egressIPName, nextHopIP, routerName, pod.Namespace, pod.Name, destAddrSetHashName, l4MatchClauses, reroutePriority)
 			if err != nil {
 				return fmt.Errorf("unable to create logical router policy ops %v, err: %v", status, err)
 			}
@@ -2973,7 +3041,7 @@ func (e *EgressIPController) addPodEgressIPAssignment(ni util.NetInfo, egressIPN
 	// don't add a reroute policy if the egress node towards which we are adding this doesn't exist
 	if loadedEgressNode && loadedPodNode {
 		if isLocalZonePod || (isLocalZoneEgressNode && ni.IsUserDefinedNetwork() && ni.TopologyType() == types.Layer2Topology) {
-			ops, err = e.createReroutePolicyOps(ni, ops, podIPs, status, mark, egressIPName, nextHopIP, routerName, pod.Namespace, pod.Name, destAddrSetHashName, reroutePriority)
+			ops, err = e.createReroutePolicyOps(ni, ops, podIPs, status, mark, egressIPName, nextHopIP, routerName, pod.Namespace, pod.Name, destAddrSetHashName, l4MatchClauses, reroutePriority)
 			if err != nil {
 				return fmt.Errorf("unable to create logical router policy ops, err: %v", err)
 			}
@@ -3400,7 +3468,7 @@ func (e *EgressIPController) getNextHop(ni util.NetInfo, egressNodeName, egressI
 // enabled, the appropriate transit switch port.
 // This function should be called with lock on nodeZoneState cache key status.Node
 func (e *EgressIPController) createReroutePolicyOps(ni util.NetInfo, ops []ovsdb.Operation, podIPNets []*net.IPNet, status egressipv1.EgressIPStatusItem,
-	mark util.EgressIPMark, egressIPName, nextHopIP, routerName, podNamespace, podName, destAddrSetHashName string, reroutePriority int) ([]ovsdb.Operation, error) {
+	mark util.EgressIPMark, egressIPName, nextHopIP, routerName, podNamespace, podName, destAddrSetHashName, l4MatchClauses string, reroutePriority int) ([]ovsdb.Operation, error) {
 	isEgressIPv6 := utilnet.IsIPv6String(status.EgressIP)
 	ipFamily := getEIPIPFamily(isEgressIPv6)
 	options := make(map[string]string)
@@ -3416,8 +3484,20 @@ func (e *EgressIPController) createReroutePolicyOps(ni util.NetInfo, ops []ovsdb
 	var err error
 	for _, podIPNet := range util.MatchAllIPNetFamily(isEgressIPv6, podIPNets) {
 		match := fmt.Sprintf("%s.src == %s", ipFamilyName(isEgressIPv6), podIPNet.IP.String())
-		if destAddrSetHashName != "" {
-			match = fmt.Sprintf("%s && %s.dst == $%s", match, ipFamilyName(isEgressIPv6), destAddrSetHashName)
+		// Build destination match: combine address set (CIDR-only) with inline L4 clauses
+		if destAddrSetHashName != "" || l4MatchClauses != "" {
+			var dstParts []string
+			if destAddrSetHashName != "" {
+				dstParts = append(dstParts, fmt.Sprintf("%s.dst == $%s", ipFamilyName(isEgressIPv6), destAddrSetHashName))
+			}
+			if l4MatchClauses != "" {
+				dstParts = append(dstParts, l4MatchClauses)
+			}
+			if len(dstParts) == 1 {
+				match = fmt.Sprintf("%s && %s", match, dstParts[0])
+			} else {
+				match = fmt.Sprintf("%s && (%s)", match, strings.Join(dstParts, " || "))
+			}
 		}
 		lrp := nbdb.LogicalRouterPolicy{
 			Match:       match,
