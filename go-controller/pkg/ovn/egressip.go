@@ -111,8 +111,8 @@ func (e *EgressIPController) getDestinationNetworksForEgressIP(spec egressipv1.E
 	}
 	var destNetworks []string
 	for _, eipt := range egressIPTraffics {
-		for _, cidr := range eipt.Spec.DestinationNetworks {
-			destNetworks = append(destNetworks, string(cidr))
+		for _, matcher := range eipt.Spec.TrafficMatchers {
+			destNetworks = append(destNetworks, matcher.CIDR)
 		}
 	}
 	return destNetworks, nil

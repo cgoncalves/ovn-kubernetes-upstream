@@ -622,10 +622,10 @@ func (c *Controller) getDestinationNetworksForEIP(eip *eipv1.EgressIP) ([]*net.I
 	}
 	var destNetworks []*net.IPNet
 	for _, eipt := range egressIPTraffics {
-		for _, cidr := range eipt.Spec.DestinationNetworks {
-			_, ipNet, err := net.ParseCIDR(string(cidr))
+		for _, matcher := range eipt.Spec.TrafficMatchers {
+			_, ipNet, err := net.ParseCIDR(matcher.CIDR)
 			if err != nil {
-				klog.Warningf("Failed to parse destination network CIDR %s from EgressIPTraffic %s: %v", cidr, eipt.Name, err)
+				klog.Warningf("Failed to parse destination network CIDR %s from EgressIPTraffic %s: %v", matcher.CIDR, eipt.Name, err)
 				continue
 			}
 			destNetworks = append(destNetworks, ipNet)

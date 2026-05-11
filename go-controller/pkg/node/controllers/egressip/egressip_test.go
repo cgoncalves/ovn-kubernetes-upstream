@@ -1935,9 +1935,9 @@ func newEgressIPMeta(name string) metav1.ObjectMeta {
 }
 
 func newEgressIPTraffic(name string, labels map[string]string, destNetworks ...string) egressiptrafficv1.EgressIPTraffic {
-	cidrs := make([]egressiptrafficv1.CIDR, 0, len(destNetworks))
+	matchers := make([]egressiptrafficv1.TrafficMatcher, 0, len(destNetworks))
 	for _, dn := range destNetworks {
-		cidrs = append(cidrs, egressiptrafficv1.CIDR(dn))
+		matchers = append(matchers, egressiptrafficv1.TrafficMatcher{CIDR: dn})
 	}
 	return egressiptrafficv1.EgressIPTraffic{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1945,7 +1945,7 @@ func newEgressIPTraffic(name string, labels map[string]string, destNetworks ...s
 			Labels: labels,
 		},
 		Spec: egressiptrafficv1.EgressIPTrafficSpec{
-			DestinationNetworks: cidrs,
+			TrafficMatchers: matchers,
 		},
 	}
 }

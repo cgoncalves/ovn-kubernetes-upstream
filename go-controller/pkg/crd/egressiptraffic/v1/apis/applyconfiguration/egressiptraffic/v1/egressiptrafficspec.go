@@ -24,21 +24,21 @@ import (
 // EgressIPTrafficSpecApplyConfiguration represents a declarative configuration of the EgressIPTrafficSpec type for use
 // with apply.
 type EgressIPTrafficSpecApplyConfiguration struct {
-	DestinationNetworks []egressiptrafficv1.CIDR `json:"destinationNetworks,omitempty"`
+	TrafficMatchers []egressiptrafficv1.TrafficMatcher `json:"trafficMatchers,omitempty"`
 }
 
-// EgressIPTrafficSpecApplyConfiguration constructs a declarative configuration of the EgressIPTrafficSpec type for use with
+// EgressIPTrafficSpec constructs a declarative configuration of the EgressIPTrafficSpec type for use with
 // apply.
 func EgressIPTrafficSpec() *EgressIPTrafficSpecApplyConfiguration {
 	return &EgressIPTrafficSpecApplyConfiguration{}
 }
 
-// WithDestinationNetworks adds the given value to the DestinationNetworks field in the declarative configuration
+// WithTrafficMatchers adds the given value to the TrafficMatchers field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
-// If called multiple times, values provided by each call will be appended to the DestinationNetworks field.
-func (b *EgressIPTrafficSpecApplyConfiguration) WithDestinationNetworks(values ...egressiptrafficv1.CIDR) *EgressIPTrafficSpecApplyConfiguration {
+// If called multiple times, values provided by each call will be appended to the TrafficMatchers field.
+func (b *EgressIPTrafficSpecApplyConfiguration) WithTrafficMatchers(values ...egressiptrafficv1.TrafficMatcher) *EgressIPTrafficSpecApplyConfiguration {
 	for i := range values {
-		b.DestinationNetworks = append(b.DestinationNetworks, values[i])
+		b.TrafficMatchers = append(b.TrafficMatchers, values[i])
 	}
 	return b
 }

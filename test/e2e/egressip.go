@@ -3086,9 +3086,9 @@ spec:
 	// interface and external containers for connectivity verification.
 
 	createEgressIPTrafficManifest := func(name string, labels map[string]string, destNetworks ...string) string {
-		var networksYAML string
+		var matchersYAML string
 		for _, cidr := range destNetworks {
-			networksYAML += fmt.Sprintf("\n    - %q", cidr)
+			matchersYAML += fmt.Sprintf("\n    - cidr: %q", cidr)
 		}
 		var labelsYAML string
 		for k, v := range labels {
@@ -3100,8 +3100,8 @@ metadata:
     name: %s
     labels:%s
 spec:
-    destinationNetworks:%s
-`, name, labelsYAML, networksYAML)
+    trafficMatchers:%s
+`, name, labelsYAML, matchersYAML)
 	}
 
 	createEIPWithTrafficSelectorManifest := func(name string, podLabel, namespaceLabel, trafficSelectorLabel map[string]string, egressIPs ...string) string {
@@ -3491,7 +3491,7 @@ spec:
 		framework.ExpectNoError(err, "traffic to primary network should use node IP (destination not in EgressIPTraffic)")
 
 		ginkgo.By("6. Update EgressIPTraffic in-place to include the secondary network CIDR")
-		patch := fmt.Sprintf(`{"spec":{"destinationNetworks":[%q]}}`, secondarySubnet)
+		patch := fmt.Sprintf(`{"spec":{"trafficMatchers":[{"cidr":%q}]}}`, secondarySubnet)
 		e2ekubectl.RunKubectlOrDie("default", "patch", "egressiptraffic", eiptName, "--type=merge", "-p", patch)
 
 		ginkgo.By("7. Verify traffic to secondary network now uses EgressIP")
