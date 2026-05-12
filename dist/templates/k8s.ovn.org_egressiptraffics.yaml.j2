@@ -17,8 +17,8 @@ spec:
   scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.destinationNetworks
-      name: DestinationNetworks
+    - jsonPath: .spec.trafficMatchers
+      name: TrafficMatchers
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -27,9 +27,10 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          EgressIPTraffic defines a set of networks outside the cluster network.
-          These networks define the destination traffic that an EgressIP should be applied to
-          when selected by an EgressIP's TrafficSelector.
+          EgressIPTraffic defines traffic matching rules for destination-based egress IP routing.
+          Traffic matchers specify destination CIDRs with optional L4 protocol/port filtering.
+          When selected by an EgressIP's TrafficSelector, only traffic matching these rules
+          is routed through the EgressIP.
         properties:
           apiVersion:
             description: |-
@@ -52,17 +53,109 @@ spec:
             description: EgressIPTrafficSpec defines the desired state description
               of EgressIPTraffic.
             properties:
-              destinationNetworks:
+              trafficMatchers:
                 description: |-
-                  DestinationNetworks is the list of Network CIDRs that defines external destinations
-                  for IPv4 and/or IPv6.
+                  TrafficMatchers defines destination networks with optional L4 protocol/port filtering.
+                  Each matcher specifies a destination CIDR and optionally restricts matching to a
+                  specific IP protocol and destination/source port or port range.
+                  Matchers without protocol/port fields match all traffic to the specified CIDR.
                 items:
-                  description: CIDR is a network CIDR. IPv4 or IPv6.
-                  maxLength: 43
-                  type: string
+                  description: TrafficMatcher defines a destination CIDR with optional
+                    L4 protocol and port filtering.
+                  properties:
+                    cidr:
+                      description: CIDR is the destination network in IPv4 or IPv6
+                        CIDR notation.
+                      maxLength: 43
+                      type: string
+                      x-kubernetes-validations:
+                      - message: must be valid IPv4 or IPv6 CIDR
+                        rule: isCIDR(self)
+                    destinationPort:
+                      description: |-
+                        DestinationPort is a single destination port to match.
+                        Mutually exclusive with DestinationPortRange.
+                      format: int32
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                    destinationPortRange:
+                      description: |-
+                        DestinationPortRange specifies an inclusive range of destination ports.
+                        Mutually exclusive with DestinationPort.
+                      properties:
+                        end:
+                          description: End is the last port in the range (inclusive).
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                        start:
+                          description: Start is the first port in the range (inclusive).
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                      required:
+                      - end
+                      - start
+                      type: object
+                      x-kubernetes-validations:
+                      - message: end must be greater than or equal to start
+                        rule: self.end >= self.start
+                    protocol:
+                      description: |-
+                        Protocol is the IP protocol to match (TCP, UDP, SCTP).
+                        Required when any port field is set.
+                      enum:
+                      - TCP
+                      - UDP
+                      - SCTP
+                      type: string
+                    sourcePort:
+                      description: |-
+                        SourcePort is a single source port to match.
+                        Mutually exclusive with SourcePortRange.
+                      format: int32
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                    sourcePortRange:
+                      description: |-
+                        SourcePortRange specifies an inclusive range of source ports.
+                        Mutually exclusive with SourcePort.
+                      properties:
+                        end:
+                          description: End is the last port in the range (inclusive).
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                        start:
+                          description: Start is the first port in the range (inclusive).
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                      required:
+                      - end
+                      - start
+                      type: object
+                      x-kubernetes-validations:
+                      - message: end must be greater than or equal to start
+                        rule: self.end >= self.start
+                  required:
+                  - cidr
+                  type: object
                   x-kubernetes-validations:
-                  - message: CIDR must be in valid IPV4 or IPV6 CIDR format
-                    rule: isCIDR(self)
+                  - message: destinationPort and destinationPortRange are mutually
+                      exclusive
+                    rule: '!has(self.destinationPort) || !has(self.destinationPortRange)'
+                  - message: sourcePort and sourcePortRange are mutually exclusive
+                    rule: '!has(self.sourcePort) || !has(self.sourcePortRange)'
+                  - message: protocol is required when any port field is set
+                    rule: '(!has(self.destinationPort) && !has(self.destinationPortRange)
+                      && !has(self.sourcePort) && !has(self.sourcePortRange)) || has(self.protocol)'
                 maxItems: 25
                 type: array
             type: object
