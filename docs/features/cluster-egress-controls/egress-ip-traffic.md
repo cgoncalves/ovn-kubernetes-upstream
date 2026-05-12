@@ -2,7 +2,7 @@
 
 ## Introduction
 
-The EgressIPTraffic feature extends EgressIP to support **per-destination egress IP routing**. It introduces a new `EgressIPTraffic` custom resource that defines destination network CIDRs, and a `trafficSelector` field on the `EgressIP` spec that selects which `EgressIPTraffic` resources apply. This allows a cluster administrator to assign different egress IP addresses for traffic to different destination networks from the same pod — for example, using one egress IP for management traffic and another for data plane traffic, each routed through a different secondary host interface.
+The EgressIPTraffic feature extends EgressIP to support **per-destination egress IP routing** with optional **L4 protocol/port filtering**. It introduces a new `EgressIPTraffic` custom resource that defines traffic matchers — destination network CIDRs with optional protocol and port constraints — and a `trafficSelector` field on the `EgressIP` spec that selects which `EgressIPTraffic` resources apply. This allows a cluster administrator to assign different egress IP addresses for traffic to different destination networks (and optionally specific protocols/ports) from the same pod — for example, using one egress IP for SIP signaling traffic (UDP port 5060) to a signaling network and another for management SSH traffic (TCP port 2222), each routed through a different secondary host interface.
 
 Always check the dependencies on the [Requirements page](../requirements.md)
 
@@ -42,8 +42,8 @@ metadata:
   labels:
     traffic-group: mgmt
 spec:
-  destinationNetworks:
-  - "192.168.250.0/24"
+  trafficMatchers:
+  - cidr: "192.168.250.0/24"
 ---
 apiVersion: k8s.ovn.org/v1
 kind: EgressIPTraffic
@@ -52,8 +52,34 @@ metadata:
   labels:
     traffic-group: signaling
 spec:
-  destinationNetworks:
-  - "192.168.251.0/24"
+  trafficMatchers:
+  - cidr: "192.168.251.0/24"
+```
+
+#### L4 protocol/port filtering
+
+Traffic matchers can optionally restrict matching to a specific IP protocol and port or port range. Matchers without protocol/port fields match all traffic to the specified CIDR (as shown above).
+
+```yaml
+apiVersion: k8s.ovn.org/v1
+kind: EgressIPTraffic
+metadata:
+  name: signaling-l4
+  labels:
+    traffic-group: signaling-l4
+spec:
+  trafficMatchers:
+  - cidr: "192.168.251.0/24"
+    protocol: UDP
+    destinationPort: 5060          # SIP signaling
+  - cidr: "192.168.251.0/24"
+    protocol: TCP
+    destinationPort: 2222          # SSH management
+  - cidr: "192.168.251.0/24"
+    protocol: TCP
+    destinationPortRange:          # RTP media ports
+      start: 10000
+      end: 10100
 ```
 
 2. **Create `EgressIP` resources** with `trafficSelector` matching the `EgressIPTraffic` labels:
@@ -137,18 +163,34 @@ A new cluster-scoped custom resource:
 ```go
 type EgressIPTraffic struct {
     metav1.TypeMeta   `json:",inline"`
-    metav1.ObjectMeta `json:"metadata,omitempty"`
-    Spec              EgressIPTrafficSpec `json:"spec,omitempty"`
+    metav1.ObjectMeta `json:"metadata"`
+    Spec              EgressIPTrafficSpec `json:"spec"`
 }
 
 type EgressIPTrafficSpec struct {
-    DestinationNetworks []CIDR `json:"destinationNetworks"`
+    TrafficMatchers []TrafficMatcher `json:"trafficMatchers,omitempty"`
 }
 
-type CIDR string
+type TrafficMatcher struct {
+    CIDR                 string    `json:"cidr"`
+    Protocol             *string   `json:"protocol,omitempty"`             // TCP, UDP, SCTP
+    DestinationPort      *int32    `json:"destinationPort,omitempty"`
+    DestinationPortRange *PortRange `json:"destinationPortRange,omitempty"`
+    SourcePort           *int32    `json:"sourcePort,omitempty"`
+    SourcePortRange      *PortRange `json:"sourcePortRange,omitempty"`
+}
+
+type PortRange struct {
+    Start int32 `json:"start"`
+    End   int32 `json:"end"`
+}
 ```
 
-- `destinationNetworks`: List of destination CIDRs that this traffic group covers.
+- `trafficMatchers`: List of traffic matchers for this traffic group. Each matcher specifies a destination CIDR with optional L4 protocol/port filtering.
+- `cidr`: Destination network in IPv4 or IPv6 CIDR notation.
+- `protocol`: IP protocol to match (`TCP`, `UDP`, `SCTP`). Required when any port field is set.
+- `destinationPort` / `destinationPortRange`: Single destination port or inclusive port range. Mutually exclusive with each other.
+- `sourcePort` / `sourcePortRange`: Single source port or inclusive port range. Mutually exclusive with each other.
 - Labels on the `EgressIPTraffic` object are used for selection by `EgressIP.spec.trafficSelector`.
 
 #### EgressIP TrafficSelector field
@@ -176,19 +218,20 @@ The feature is implemented across two controllers:
 #### Traffic flow diagram
 
 ```text
-Pod (10.244.1.3) sends packet to 192.168.250.1
+Pod (10.244.1.3) sends UDP packet to 192.168.250.1:5060
     │
     ▼
 OVN Cluster Router
-    │ LRP match: ip4.src == 10.244.1.3 && ip4.dst == $dest-nets-eip-mgmt
+    │ LRP match: ip4.src == 10.244.1.3 && (ip4.dst == $dest-nets-eip-sig
+    │            || (ip4.dst == 192.168.251.0/24 && udp && udp.dst == 5060))
     │ Priority: 100, Action: reroute → 10.244.2.2 (egress node mgmt port)
     ▼
 Egress Node (ovn-k8s-mp0)
-    │ IP rule: from 10.244.1.3 to 192.168.250.0/24 lookup 1026
+    │ IP rule: from 10.244.1.3 to 192.168.250.0/24 ipproto udp dport 5060 lookup 1026
     │ Route table 1026: 192.168.250.0/24 via 192.168.150.1 dev eth-mgmt
     │ iptables: -s 10.244.1.3/32 -o eth-mgmt -j SNAT --to-source 192.168.150.101
     ▼
-External network (src: 192.168.150.101 → dst: 192.168.250.1)
+External network (src: 192.168.150.101 → dst: 192.168.250.1:5060)
 ```
 
 For non-matching traffic (e.g., to 1.1.1.1):
@@ -198,7 +241,7 @@ For non-matching traffic (e.g., to 1.1.1.1):
 
 #### OVN Constructs created in the databases
 
-**Destination networks address set** — one per EgressIP with `trafficSelector`:
+**Destination networks address set** — one per EgressIP with `trafficSelector`. Only CIDR-only matchers (those without L4 protocol/port constraints) are placed in the address set. L4-filtered matchers get inline match expressions on the LRP instead:
 
 ```shell
 $ ovn-nbctl find address_set name=a4776992171281246630
@@ -206,11 +249,17 @@ addresses : ["192.168.250.0/24"]
 external_ids : {k8s.ovn.org/name=egressip-dest-nets-eip-mgmt, ...}
 ```
 
-**Destination-filtered reroute LRP** — priority 100 with destination match:
+**Destination-filtered reroute LRP** — priority 100 with destination match. When all matchers are CIDR-only, the match uses the address set:
 
 ```shell
 $ ovn-nbctl lr-policy-list ovn_cluster_router
 100 ip4.src == 10.244.1.3 && ip4.dst == $a4776992171281246630    reroute    10.244.2.2
+```
+
+When L4-filtered matchers are present, the LRP match is a compound expression combining the address set (for CIDR-only matchers) and inline L4 conditions (for matchers with protocol/port):
+
+```shell
+100 ip4.src == 10.244.1.3 && (ip4.dst == $a4776992171281246630 || (ip4.dst == 192.168.251.0/24 && udp && udp.dst == 5060) || (ip4.dst == 192.168.251.0/24 && tcp && tcp.dst == 2222))    reroute    10.244.2.2
 ```
 
 Compare with a standard (non-`trafficSelector`) EgressIP reroute which has no destination filter and uses priority 99:
@@ -237,12 +286,13 @@ Without the match, two SNAT rules for the same pod IP on the same GW router woul
 
 #### Node-side constructs
 
-**Per-destination IP rules** — each destination CIDR gets its own rule at priority 6000:
+**Per-destination IP rules** — each traffic matcher gets its own rule at priority 6000. CIDR-only matchers produce a simple `to` rule; L4-filtered matchers add `ipproto` and `dport`/`sport` selectors:
 
 ```shell
 $ ip rule
 6000: from 10.244.1.3 to 192.168.250.0/24 lookup 1026
-6000: from 10.244.1.3 to 192.168.251.0/24 lookup 1028
+6000: from 10.244.1.3 to 192.168.251.0/24 ipproto udp dport 5060 lookup 1028
+6000: from 10.244.1.3 to 192.168.251.0/24 ipproto tcp dport 2222 lookup 1028
 ```
 
 Non-`trafficSelector` catch-all rules use priority 6001 to ensure destination-specific rules are evaluated first:
@@ -309,7 +359,7 @@ Check that `status.items` shows the EgressIP assigned to a node.
 ovn-nbctl lr-policy-list ovn_cluster_router | grep "ip4.dst"
 ```
 
-You should see LRPs at priority 100 with `ip4.dst == $<address-set-hash>`.
+You should see LRPs at priority 100 with `ip4.dst == $<address-set-hash>`. If L4-filtered matchers are configured, the match will also include inline protocol/port conditions (e.g., `udp && udp.dst == 5060`).
 
 ### Verify address set contents
 
@@ -317,7 +367,7 @@ You should see LRPs at priority 100 with `ip4.dst == $<address-set-hash>`.
 ovn-nbctl find address_set | grep -A2 "egressip-dest-nets"
 ```
 
-The `addresses` field should contain the destination CIDRs from the matching `EgressIPTraffic` resources. If it's empty, no `EgressIPTraffic` resources match the `trafficSelector` — a warning will be logged:
+The `addresses` field contains only the CIDRs from CIDR-only matchers (those without L4 protocol/port constraints). L4-filtered matchers are represented as inline match conditions on the LRP, not in the address set. If the address set is empty and no L4-filtered matchers exist, no `EgressIPTraffic` resources match the `trafficSelector` — a warning will be logged:
 
 ```text
 EgressIP <name> has a TrafficSelector but no matching EgressIPTraffic destination networks were found
@@ -350,6 +400,7 @@ iptables -t nat -L OVN-KUBE-EGRESS-IP-MULTI-NIC -n  # SNAT rules
 
 - When the last `EgressIPTraffic` matching a `trafficSelector` is deleted, the destination networks address set becomes empty and the EgressIP stops routing traffic. This is by design: no matching destination networks means no traffic should use this EgressIP. A warning is logged and a Kubernetes event is emitted on the EgressIP object to help operators notice potential misconfigurations.
 - An IPv6 EgressIP with a `trafficSelector` matching only IPv4 destination networks (or vice versa) will not route any traffic for the mismatched address family. A destination networks address set is maintained for each EgressIP with `trafficSelector`; if no destination networks match the EgressIP's address family, no traffic is rerouted. This is by design: destination networks must match the EgressIP's address family.
+- Port ranges in OVN LRP match expressions use range syntax (e.g., `tcp.dst == 5060..5062`).
 
 ## Future Items
 
@@ -361,6 +412,7 @@ iptables -t nat -L OVN-KUBE-EGRESS-IP-MULTI-NIC -n  # SNAT rules
 - EgressIPTraffic is only supported for the cluster default network. User-defined networks (UDNs) are not supported.
 - Per-destination routing tables on egress nodes are snapshots of the link's routes at processing time. Dynamic route changes (e.g., via BGP) are not automatically reflected until the next sync or EgressIP reconciliation.
 - Overlapping destination CIDRs across different EgressIPs targeting the same pod are not detected. If two EgressIPs with different `trafficSelector` match overlapping CIDRs, the OVN LRP behavior at the same priority is undefined.
+- Port ranges use OVN range syntax (e.g., `tcp.dst == 5060..5062`).
 
 ## References
 

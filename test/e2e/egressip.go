@@ -3634,6 +3634,298 @@ spec:
 		framework.ExpectNoError(err, "after adding trafficSelector, non-matching destination should use node IP")
 	})
 
+	ginkgo.It("[secondary-host-eip] [traffic-selector] Should route only matching protocol/port traffic via EgressIP with L4 filtering", func() {
+		if !isEgressIPTrafficEnabled() {
+			ginkgo.Skip("EgressIPTraffic feature not enabled")
+		}
+		if isUserDefinedNetwork(netConfigParams) {
+			ginkgo.Skip("Unsupported for UDNs")
+		}
+		var egressIP1 string
+		var secondarySubnet string
+		isV6Node := utilnet.IsIPv6(net.ParseIP(egress1Node.nodeIP))
+		if isV6Node {
+			egressIP1 = "2001:db8:abcd:1234:c001::"
+			secondarySubnet = secondaryIPV6Subnet
+		} else {
+			egressIP1 = "10.10.10.100"
+			secondarySubnet = secondaryIPV4Subnet
+		}
+
+		egressNodeAvailabilityHandler := egressNodeAvailabilityHandlerViaLabel{f}
+		ginkgo.By("1. Set one node as available for egress")
+		egressNodeAvailabilityHandler.Enable(egress1Node.name)
+		defer egressNodeAvailabilityHandler.Restore(egress1Node.name)
+		podNamespace := f.Namespace
+		updateNamespaceLabels(f, podNamespace, map[string]string{"name": f.Namespace.Name})
+
+		trafficLabel := map[string]string{"traffic-group": "l4-test"}
+		eiptName := "eipt-l4"
+		eiptYaml := "egressiptraffic-l4.yaml"
+
+		ginkgo.By("2. Create EgressIPTraffic with L4 filtering (TCP on secondary external container port)")
+		// Use the secondary target external container's actual port for the L4 filter.
+		// Only TCP traffic to that specific port should use the EgressIP.
+		extPort := secondaryTargetExternalContainer.GetPort()
+		eiptManifest := fmt.Sprintf(`apiVersion: k8s.ovn.org/v1
+kind: EgressIPTraffic
+metadata:
+    name: %s
+    labels:
+        traffic-group: l4-test
+spec:
+    trafficMatchers:
+    - cidr: %q
+      protocol: TCP
+      destinationPort: %d
+`, eiptName, secondarySubnet, extPort)
+		applyManifest(eiptManifest, eiptYaml)
+		defer deleteManifestFile(eiptYaml)
+		defer e2ekubectl.RunKubectlOrDie("default", "delete", "egressiptraffic", eiptName, "--ignore-not-found=true")
+
+		ginkgo.By("3. Create EgressIP with trafficSelector matching the L4-filtered EgressIPTraffic")
+		applyManifest(createEIPWithTrafficSelectorManifest(egressIPName,
+			podEgressLabel, map[string]string{"name": f.Namespace.Name}, trafficLabel, egressIP1), egressIPYaml)
+		defer deleteManifestFile(egressIPYaml)
+
+		if isV6Node {
+			egressIP1 = net.ParseIP(egressIP1).String()
+		}
+		verifyEIPStatusByName(egressIPName, egressIP1)
+
+		ginkgo.By("4. Create pod matching the EgressIP")
+		createGenericPodWithLabel(f, pod1Name, pod1Node.name, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(clusterNetworkHTTPPort), podEgressLabel)
+		_, err := getPodIPWithRetry(f.ClientSet, isIPv6TestRun, f.Namespace.Name, pod1Name)
+		framework.ExpectNoError(err, "failed to get pod IP")
+
+		ginkgo.By("5. Verify TCP traffic to secondary network on matching port uses EgressIP")
+		err = wait.PollImmediate(retryInterval, retryTimeout,
+			targetExternalContainerAndTest(secondaryTargetExternalContainer, f.Namespace.Name, pod1Name, true, []string{egressIP1}))
+		framework.ExpectNoError(err, "TCP traffic to matching port should use EgressIP %s", egressIP1)
+	})
+
+	ginkgo.It("[secondary-host-eip] [traffic-selector] Should NOT route traffic on non-matching port via EgressIP with L4 filtering", func() {
+		if !isEgressIPTrafficEnabled() {
+			ginkgo.Skip("EgressIPTraffic feature not enabled")
+		}
+		if isUserDefinedNetwork(netConfigParams) {
+			ginkgo.Skip("Unsupported for UDNs")
+		}
+		var egressIP1 string
+		var secondarySubnet string
+		isV6Node := utilnet.IsIPv6(net.ParseIP(egress1Node.nodeIP))
+		if isV6Node {
+			egressIP1 = "2001:db8:abcd:1234:c001::"
+			secondarySubnet = secondaryIPV6Subnet
+		} else {
+			egressIP1 = "10.10.10.100"
+			secondarySubnet = secondaryIPV4Subnet
+		}
+
+		egressNodeAvailabilityHandler := egressNodeAvailabilityHandlerViaLabel{f}
+		ginkgo.By("1. Set one node as available for egress")
+		egressNodeAvailabilityHandler.Enable(egress1Node.name)
+		defer egressNodeAvailabilityHandler.Restore(egress1Node.name)
+		podNamespace := f.Namespace
+		updateNamespaceLabels(f, podNamespace, map[string]string{"name": f.Namespace.Name})
+
+		trafficLabel := map[string]string{"traffic-group": "l4-neg"}
+		eiptName := "eipt-l4-neg"
+		eiptYaml := "egressiptraffic-l4-neg.yaml"
+
+		ginkgo.By("2. Create EgressIPTraffic with L4 filtering for a port that the external container does NOT listen on")
+		// Use port 9999 — the external container listens on a different port.
+		// Traffic to the secondary network on this port should use the EgressIP (rerouted),
+		// but traffic to the external container's actual port should NOT be rerouted.
+		dummyPort := 9999
+		eiptManifest := fmt.Sprintf(`apiVersion: k8s.ovn.org/v1
+kind: EgressIPTraffic
+metadata:
+    name: %s
+    labels:
+        traffic-group: l4-neg
+spec:
+    trafficMatchers:
+    - cidr: %q
+      protocol: TCP
+      destinationPort: %d
+`, eiptName, secondarySubnet, dummyPort)
+		applyManifest(eiptManifest, eiptYaml)
+		defer deleteManifestFile(eiptYaml)
+		defer e2ekubectl.RunKubectlOrDie("default", "delete", "egressiptraffic", eiptName, "--ignore-not-found=true")
+
+		ginkgo.By("3. Create EgressIP with trafficSelector")
+		applyManifest(createEIPWithTrafficSelectorManifest(egressIPName,
+			podEgressLabel, map[string]string{"name": f.Namespace.Name}, trafficLabel, egressIP1), egressIPYaml)
+		defer deleteManifestFile(egressIPYaml)
+
+		if isV6Node {
+			egressIP1 = net.ParseIP(egressIP1).String()
+		}
+		verifyEIPStatusByName(egressIPName, egressIP1)
+
+		ginkgo.By("4. Create pod matching the EgressIP")
+		createGenericPodWithLabel(f, pod1Name, pod1Node.name, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(clusterNetworkHTTPPort), podEgressLabel)
+		_, err := getPodIPWithRetry(f.ClientSet, isIPv6TestRun, f.Namespace.Name, pod1Name)
+		framework.ExpectNoError(err, "failed to get pod IP")
+
+		ginkgo.By("5. Verify traffic to secondary network on the external container's port does NOT use EgressIP")
+		// The L4 filter specifies port 9999, but the external container listens on its own port.
+		// Traffic to the external container's port should NOT match the L4 filter,
+		// so it should fail (no route to secondary network for non-matching traffic).
+		err = wait.PollImmediate(retryInterval, retryTimeout,
+			targetExternalContainerAndTest(secondaryTargetExternalContainer, f.Namespace.Name, pod1Name, false, []string{egressIP1}))
+		framework.ExpectNoError(err, "traffic to non-matching port should NOT be routed via EgressIP")
+	})
+
+	ginkgo.It("[secondary-host-eip] [traffic-selector] Should route traffic with mixed CIDR-only and L4-filtered matchers", func() {
+		if !isEgressIPTrafficEnabled() {
+			ginkgo.Skip("EgressIPTraffic feature not enabled")
+		}
+		if isUserDefinedNetwork(netConfigParams) {
+			ginkgo.Skip("Unsupported for UDNs")
+		}
+		var egressIP1 string
+		var secondarySubnet string
+		isV6Node := utilnet.IsIPv6(net.ParseIP(egress1Node.nodeIP))
+		if isV6Node {
+			egressIP1 = "2001:db8:abcd:1234:c001::"
+			secondarySubnet = secondaryIPV6Subnet
+		} else {
+			egressIP1 = "10.10.10.100"
+			secondarySubnet = secondaryIPV4Subnet
+		}
+
+		egressNodeAvailabilityHandler := egressNodeAvailabilityHandlerViaLabel{f}
+		ginkgo.By("1. Set one node as available for egress")
+		egressNodeAvailabilityHandler.Enable(egress1Node.name)
+		defer egressNodeAvailabilityHandler.Restore(egress1Node.name)
+		podNamespace := f.Namespace
+		updateNamespaceLabels(f, podNamespace, map[string]string{"name": f.Namespace.Name})
+
+		trafficLabel := map[string]string{"traffic-group": "l4-mixed"}
+		eiptName := "eipt-l4-mixed"
+		eiptYaml := "egressiptraffic-l4-mixed.yaml"
+
+		ginkgo.By("2. Create EgressIPTraffic with both CIDR-only and L4-filtered matchers")
+		// The CIDR-only matcher covers the secondary network (all traffic).
+		// The L4 matcher covers a dummy network on TCP port 80.
+		// Traffic to the secondary network should use EgressIP via the CIDR-only matcher.
+		eiptManifest := fmt.Sprintf(`apiVersion: k8s.ovn.org/v1
+kind: EgressIPTraffic
+metadata:
+    name: %s
+    labels:
+        traffic-group: l4-mixed
+spec:
+    trafficMatchers:
+    - cidr: %q
+    - cidr: "10.99.99.0/24"
+      protocol: TCP
+      destinationPort: 80
+`, eiptName, secondarySubnet)
+		applyManifest(eiptManifest, eiptYaml)
+		defer deleteManifestFile(eiptYaml)
+		defer e2ekubectl.RunKubectlOrDie("default", "delete", "egressiptraffic", eiptName, "--ignore-not-found=true")
+
+		ginkgo.By("3. Create EgressIP with trafficSelector")
+		applyManifest(createEIPWithTrafficSelectorManifest(egressIPName,
+			podEgressLabel, map[string]string{"name": f.Namespace.Name}, trafficLabel, egressIP1), egressIPYaml)
+		defer deleteManifestFile(egressIPYaml)
+
+		if isV6Node {
+			egressIP1 = net.ParseIP(egressIP1).String()
+		}
+		verifyEIPStatusByName(egressIPName, egressIP1)
+
+		ginkgo.By("4. Create pod matching the EgressIP")
+		createGenericPodWithLabel(f, pod1Name, pod1Node.name, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(clusterNetworkHTTPPort), podEgressLabel)
+		_, err := getPodIPWithRetry(f.ClientSet, isIPv6TestRun, f.Namespace.Name, pod1Name)
+		framework.ExpectNoError(err, "failed to get pod IP")
+
+		ginkgo.By("5. Verify traffic to secondary network uses EgressIP (matched by CIDR-only matcher)")
+		err = wait.PollImmediate(retryInterval, retryTimeout,
+			targetExternalContainerAndTest(secondaryTargetExternalContainer, f.Namespace.Name, pod1Name, true, []string{egressIP1}))
+		framework.ExpectNoError(err, "traffic to secondary network should use EgressIP %s via CIDR-only matcher", egressIP1)
+	})
+
+	ginkgo.It("[secondary-host-eip] [traffic-selector] Should route traffic with destination port range L4 filtering", func() {
+		if !isEgressIPTrafficEnabled() {
+			ginkgo.Skip("EgressIPTraffic feature not enabled")
+		}
+		if isUserDefinedNetwork(netConfigParams) {
+			ginkgo.Skip("Unsupported for UDNs")
+		}
+		var egressIP1 string
+		var secondarySubnet string
+		isV6Node := utilnet.IsIPv6(net.ParseIP(egress1Node.nodeIP))
+		if isV6Node {
+			egressIP1 = "2001:db8:abcd:1234:c001::"
+			secondarySubnet = secondaryIPV6Subnet
+		} else {
+			egressIP1 = "10.10.10.100"
+			secondarySubnet = secondaryIPV4Subnet
+		}
+
+		egressNodeAvailabilityHandler := egressNodeAvailabilityHandlerViaLabel{f}
+		ginkgo.By("1. Set one node as available for egress")
+		egressNodeAvailabilityHandler.Enable(egress1Node.name)
+		defer egressNodeAvailabilityHandler.Restore(egress1Node.name)
+		podNamespace := f.Namespace
+		updateNamespaceLabels(f, podNamespace, map[string]string{"name": f.Namespace.Name})
+
+		trafficLabel := map[string]string{"traffic-group": "l4-range"}
+		eiptName := "eipt-l4-range"
+		eiptYaml := "egressiptraffic-l4-range.yaml"
+
+		ginkgo.By("2. Create EgressIPTraffic with port range covering the external container's port")
+		extPort := secondaryTargetExternalContainer.GetPort()
+		// Create a range that includes the external container's port
+		rangeStart := extPort - 5
+		rangeEnd := extPort + 5
+		eiptManifest := fmt.Sprintf(`apiVersion: k8s.ovn.org/v1
+kind: EgressIPTraffic
+metadata:
+    name: %s
+    labels:
+        traffic-group: l4-range
+spec:
+    trafficMatchers:
+    - cidr: %q
+      protocol: TCP
+      destinationPortRange:
+        start: %d
+        end: %d
+`, eiptName, secondarySubnet, rangeStart, rangeEnd)
+		applyManifest(eiptManifest, eiptYaml)
+		defer deleteManifestFile(eiptYaml)
+		defer e2ekubectl.RunKubectlOrDie("default", "delete", "egressiptraffic", eiptName, "--ignore-not-found=true")
+
+		ginkgo.By("3. Create EgressIP with trafficSelector")
+		applyManifest(createEIPWithTrafficSelectorManifest(egressIPName,
+			podEgressLabel, map[string]string{"name": f.Namespace.Name}, trafficLabel, egressIP1), egressIPYaml)
+		defer deleteManifestFile(egressIPYaml)
+
+		if isV6Node {
+			egressIP1 = net.ParseIP(egressIP1).String()
+		}
+		verifyEIPStatusByName(egressIPName, egressIP1)
+
+		ginkgo.By("4. Create pod matching the EgressIP")
+		createGenericPodWithLabel(f, pod1Name, pod1Node.name, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(clusterNetworkHTTPPort), podEgressLabel)
+		_, err := getPodIPWithRetry(f.ClientSet, isIPv6TestRun, f.Namespace.Name, pod1Name)
+		framework.ExpectNoError(err, "failed to get pod IP")
+
+		ginkgo.By("5. Verify TCP traffic within port range uses EgressIP")
+		err = wait.PollImmediate(retryInterval, retryTimeout,
+			targetExternalContainerAndTest(secondaryTargetExternalContainer, f.Namespace.Name, pod1Name, true, []string{egressIP1}))
+		framework.ExpectNoError(err, "TCP traffic within port range %d-%d should use EgressIP %s", rangeStart, rangeEnd, egressIP1)
+	})
+
 	// two pods attached to different namespaces but the same role primary user defined network
 	// One pod is deleted and ensure connectivity for the other pod is ok
 	// The previous pod namespace is deleted and again, ensure connectivity for the other pod is ok
