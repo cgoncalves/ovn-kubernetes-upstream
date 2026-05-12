@@ -31,6 +31,7 @@ import (
 	libovsdbtest "github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/testing/libovsdb"
 	"github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/types"
 	"github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/util"
+	egressiputil "github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/util/egressip"
 )
 
 var (
@@ -89,6 +90,14 @@ type nodeInfo struct {
 }
 
 var egressPodLabel = map[string]string{"egress": "needed"}
+
+func mustParseTestCIDR(s string) *net.IPNet {
+	_, ipNet, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(err)
+	}
+	return ipNet
+}
 
 var _ = ginkgo.Describe("EgressIP TrafficSelector helper functions", func() {
 
@@ -234,6 +243,95 @@ var _ = ginkgo.Describe("EgressIP TrafficSelector helper functions", func() {
 
 		ginkgo.It("trafficSelector priority is higher than standard EgressIP priority", func() {
 			gomega.Expect(types.EgressIPTrafficReroutePriority).To(gomega.BeNumerically(">", types.EgressIPReroutePriority))
+		})
+	})
+
+	ginkgo.Context("L4 match clause building", func() {
+		ginkgo.It("returns empty string for CIDR-only matchers", func() {
+			matchers := []*egressiputil.ParsedTrafficMatcher{
+				{CIDR: mustParseTestCIDR("192.168.250.0/24")},
+			}
+			gomega.Expect(buildL4MatchClauses(false, matchers)).To(gomega.Equal(""))
+		})
+
+		ginkgo.It("builds match for TCP with single destination port", func() {
+			matchers := []*egressiputil.ParsedTrafficMatcher{
+				{CIDR: mustParseTestCIDR("10.0.0.0/8"), Protocol: 6, DstPortStart: 5060, DstPortEnd: 5060},
+			}
+			result := buildL4MatchClauses(false, matchers)
+			gomega.Expect(result).To(gomega.Equal("(ip4.dst == 10.0.0.0/8 && tcp && tcp.dst == 5060)"))
+		})
+
+		ginkgo.It("builds match for UDP with destination port range", func() {
+			matchers := []*egressiputil.ParsedTrafficMatcher{
+				{CIDR: mustParseTestCIDR("10.0.0.0/8"), Protocol: 17, DstPortStart: 5060, DstPortEnd: 5062},
+			}
+			result := buildL4MatchClauses(false, matchers)
+			gomega.Expect(result).To(gomega.Equal("(ip4.dst == 10.0.0.0/8 && udp && udp.dst == 5060..5062)"))
+		})
+
+		ginkgo.It("builds match for TCP with source port", func() {
+			matchers := []*egressiputil.ParsedTrafficMatcher{
+				{CIDR: mustParseTestCIDR("10.0.0.0/8"), Protocol: 6, SrcPortStart: 3868, SrcPortEnd: 3868},
+			}
+			result := buildL4MatchClauses(false, matchers)
+			gomega.Expect(result).To(gomega.Equal("(ip4.dst == 10.0.0.0/8 && tcp && tcp.src == 3868)"))
+		})
+
+		ginkgo.It("builds match for TCP with both dst and src ports", func() {
+			matchers := []*egressiputil.ParsedTrafficMatcher{
+				{CIDR: mustParseTestCIDR("10.0.0.0/8"), Protocol: 6, DstPortStart: 22, DstPortEnd: 22, SrcPortStart: 1024, SrcPortEnd: 1026},
+			}
+			result := buildL4MatchClauses(false, matchers)
+			gomega.Expect(result).To(gomega.Equal("(ip4.dst == 10.0.0.0/8 && tcp && tcp.dst == 22 && tcp.src == 1024..1026)"))
+		})
+
+		ginkgo.It("combines multiple L4 matchers with ||", func() {
+			matchers := []*egressiputil.ParsedTrafficMatcher{
+				{CIDR: mustParseTestCIDR("10.0.0.0/8"), Protocol: 6, DstPortStart: 80, DstPortEnd: 80},
+				{CIDR: mustParseTestCIDR("10.0.0.0/8"), Protocol: 17, DstPortStart: 53, DstPortEnd: 53},
+			}
+			result := buildL4MatchClauses(false, matchers)
+			gomega.Expect(result).To(gomega.Equal("(ip4.dst == 10.0.0.0/8 && tcp && tcp.dst == 80) || (ip4.dst == 10.0.0.0/8 && udp && udp.dst == 53)"))
+		})
+
+		ginkgo.It("skips matchers with wrong IP family", func() {
+			matchers := []*egressiputil.ParsedTrafficMatcher{
+				{CIDR: mustParseTestCIDR("2001:db8::/32"), Protocol: 6, DstPortStart: 80, DstPortEnd: 80},
+			}
+			gomega.Expect(buildL4MatchClauses(false, matchers)).To(gomega.Equal(""))
+			gomega.Expect(buildL4MatchClauses(true, matchers)).To(gomega.Equal("(ip6.dst == 2001:db8::/32 && tcp && tcp.dst == 80)"))
+		})
+
+		ginkgo.It("skips CIDR-only matchers and only includes L4", func() {
+			matchers := []*egressiputil.ParsedTrafficMatcher{
+				{CIDR: mustParseTestCIDR("192.168.0.0/16")},
+				{CIDR: mustParseTestCIDR("10.0.0.0/8"), Protocol: 6, DstPortStart: 443, DstPortEnd: 443},
+			}
+			result := buildL4MatchClauses(false, matchers)
+			gomega.Expect(result).To(gomega.Equal("(ip4.dst == 10.0.0.0/8 && tcp && tcp.dst == 443)"))
+		})
+
+		ginkgo.It("builds match for protocol only (no ports)", func() {
+			matchers := []*egressiputil.ParsedTrafficMatcher{
+				{CIDR: mustParseTestCIDR("10.0.0.0/8"), Protocol: 6},
+			}
+			result := buildL4MatchClauses(false, matchers)
+			gomega.Expect(result).To(gomega.Equal("(ip4.dst == 10.0.0.0/8 && tcp)"))
+		})
+	})
+
+	ginkgo.Context("buildPortMatch", func() {
+		ginkgo.It("builds single port match", func() {
+			gomega.Expect(buildPortMatch("tcp.dst", 5060, 5060)).To(gomega.Equal("tcp.dst == 5060"))
+		})
+
+		ginkgo.It("builds port range match with range syntax", func() {
+			gomega.Expect(buildPortMatch("udp.dst", 5060, 5063)).To(gomega.Equal("udp.dst == 5060..5063"))
+		})
+
+		ginkgo.It("builds source port match", func() {
+			gomega.Expect(buildPortMatch("tcp.src", 1024, 1024)).To(gomega.Equal("tcp.src == 1024"))
 		})
 	})
 })

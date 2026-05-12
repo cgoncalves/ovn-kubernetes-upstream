@@ -1351,6 +1351,42 @@ var _ = ginkgo.Describe("EgressIPTraffic helper functions", func() {
 		})
 	})
 
+	ginkgo.Context("ruleKey", func() {
+		ginkgo.It("includes IPProto in key", func() {
+			r1 := netlink.Rule{Priority: 6000, Table: 1010, IPProto: 6}
+			r2 := netlink.Rule{Priority: 6000, Table: 1010, IPProto: 17}
+			gomega.Expect(ruleKey(r1)).NotTo(gomega.Equal(ruleKey(r2)))
+			gomega.Expect(ruleKey(r1)).To(gomega.ContainSubstring("ipproto 6"))
+			gomega.Expect(ruleKey(r2)).To(gomega.ContainSubstring("ipproto 17"))
+		})
+
+		ginkgo.It("includes Dport in key", func() {
+			r1 := netlink.Rule{Priority: 6000, Table: 1010, IPProto: 6, Dport: netlink.NewRulePortRange(80, 80)}
+			r2 := netlink.Rule{Priority: 6000, Table: 1010, IPProto: 6, Dport: netlink.NewRulePortRange(443, 443)}
+			gomega.Expect(ruleKey(r1)).NotTo(gomega.Equal(ruleKey(r2)))
+			gomega.Expect(ruleKey(r1)).To(gomega.ContainSubstring("dport 80"))
+			gomega.Expect(ruleKey(r2)).To(gomega.ContainSubstring("dport 443"))
+		})
+
+		ginkgo.It("includes Sport in key", func() {
+			r := netlink.Rule{Priority: 6000, Table: 1010, IPProto: 6, Sport: netlink.NewRulePortRange(1024, 2048)}
+			gomega.Expect(ruleKey(r)).To(gomega.ContainSubstring("sport 1024-2048"))
+		})
+
+		ginkgo.It("produces identical keys for identical rules without L4", func() {
+			r1 := netlink.Rule{Priority: 6000, Table: 1010}
+			r2 := netlink.Rule{Priority: 6000, Table: 1010}
+			gomega.Expect(ruleKey(r1)).To(gomega.Equal(ruleKey(r2)))
+		})
+
+		ginkgo.It("differentiates rules with same CIDR but different protocol/port", func() {
+			dst := mustParseCIDR("192.168.250.0/24")
+			r1 := netlink.Rule{Priority: 6000, Table: 1010, Dst: dst, IPProto: 6, Dport: netlink.NewRulePortRange(80, 80)}
+			r2 := netlink.Rule{Priority: 6000, Table: 1010, Dst: dst, IPProto: 17, Dport: netlink.NewRulePortRange(5060, 5060)}
+			gomega.Expect(ruleKey(r1)).NotTo(gomega.Equal(ruleKey(r2)))
+		})
+	})
+
 	ginkgo.Context("containsRoute", func() {
 		ginkgo.It("finds matching route", func() {
 			routes := []netlink.Route{
