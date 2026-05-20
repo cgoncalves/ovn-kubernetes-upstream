@@ -3926,6 +3926,72 @@ spec:
 		framework.ExpectNoError(err, "TCP traffic within port range %d-%d should use EgressIP %s", rangeStart, rangeEnd, egressIP1)
 	})
 
+	ginkgo.It("[secondary-host-eip] [traffic-selector] Should route traffic with /32 destination CIDR inheriting gateway from broader route", func() {
+		if !isEgressIPTrafficEnabled() {
+			ginkgo.Skip("EgressIPTraffic feature not enabled")
+		}
+		if isUserDefinedNetwork(netConfigParams) {
+			ginkgo.Skip("Unsupported for UDNs")
+		}
+		var egressIP1 string
+		var targetHostCIDR string
+		isV6Node := utilnet.IsIPv6(net.ParseIP(egress1Node.nodeIP))
+		if isV6Node {
+			egressIP1 = "2001:db8:abcd:1234:c001::"
+			targetHostCIDR = secondaryTargetExternalContainer.GetIPv6() + "/128"
+		} else {
+			egressIP1 = "10.10.10.100"
+			targetHostCIDR = secondaryTargetExternalContainer.GetIPv4() + "/32"
+		}
+
+		egressNodeAvailabilityHandler := egressNodeAvailabilityHandlerViaLabel{f}
+		ginkgo.By("1. Set one node as available for egress")
+		egressNodeAvailabilityHandler.Enable(egress1Node.name)
+		defer egressNodeAvailabilityHandler.Restore(egress1Node.name)
+		podNamespace := f.Namespace
+		updateNamespaceLabels(f, podNamespace, map[string]string{"name": f.Namespace.Name})
+
+		trafficLabel := map[string]string{"traffic-group": "host-cidr"}
+		eiptName := "eipt-host-cidr"
+		eiptYaml := "egressiptraffic-host-cidr.yaml"
+
+		ginkgo.By("2. Create EgressIPTraffic with /32 CIDR targeting the external container's IP")
+		eiptManifest := fmt.Sprintf(`apiVersion: k8s.ovn.org/v1
+kind: EgressIPTraffic
+metadata:
+    name: %s
+    labels:
+        traffic-group: host-cidr
+spec:
+    trafficMatchers:
+    - cidr: %q
+`, eiptName, targetHostCIDR)
+		applyManifest(eiptManifest, eiptYaml)
+		defer deleteManifestFile(eiptYaml)
+		defer e2ekubectl.RunKubectlOrDie("default", "delete", "egressiptraffic", eiptName, "--ignore-not-found=true")
+
+		ginkgo.By("3. Create EgressIP with trafficSelector")
+		applyManifest(createEIPWithTrafficSelectorManifest(egressIPName,
+			podEgressLabel, map[string]string{"name": f.Namespace.Name}, trafficLabel, egressIP1), egressIPYaml)
+		defer deleteManifestFile(egressIPYaml)
+
+		if isV6Node {
+			egressIP1 = net.ParseIP(egressIP1).String()
+		}
+		verifyEIPStatusByName(egressIPName, egressIP1)
+
+		ginkgo.By("4. Create pod matching the EgressIP")
+		createGenericPodWithLabel(f, pod1Name, pod1Node.name, f.Namespace.Name,
+			getAgnHostHTTPPortBindFullCMD(clusterNetworkHTTPPort), podEgressLabel)
+		_, err := getPodIPWithRetry(f.ClientSet, isIPv6TestRun, f.Namespace.Name, pod1Name)
+		framework.ExpectNoError(err, "failed to get pod IP")
+
+		ginkgo.By("5. Verify traffic to /32 destination uses EgressIP (gateway inherited from broader route)")
+		err = wait.PollImmediate(retryInterval, retryTimeout,
+			targetExternalContainerAndTest(secondaryTargetExternalContainer, f.Namespace.Name, pod1Name, true, []string{egressIP1}))
+		framework.ExpectNoError(err, "traffic to /32 destination should use EgressIP %s with gateway inherited from broader route", egressIP1)
+	})
+
 	// two pods attached to different namespaces but the same role primary user defined network
 	// One pod is deleted and ensure connectivity for the other pod is ok
 	// The previous pod namespace is deleted and again, ensure connectivity for the other pod is ok

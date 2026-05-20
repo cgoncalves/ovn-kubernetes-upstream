@@ -859,16 +859,19 @@ func replaceDefaultRouteWithDestNetworks(routes []netlink.Route, linkIndex int, 
 		if utilnet.IsIPv6CIDR(destCIDR) != isV6 {
 			continue
 		}
-		// If a route for this CIDR already exists (e.g., a specific route with a gateway
-		// from the main table), keep it rather than creating a duplicate without a gateway.
+		// If a route for this exact CIDR already exists (e.g., a specific route with a
+		// gateway from the main table), keep it rather than creating a duplicate.
 		if hasRouteForDst(filtered, destCIDR) {
 			continue
 		}
+		// Use the best available gateway: prefer a broader route's gateway (e.g., a /24
+		// route covering a /32 destination), fall back to the default route's gateway.
+		gw := findBestGateway(filtered, destCIDR, defaultGw)
 		filtered = append(filtered, netlink.Route{
 			Dst:       destCIDR,
 			LinkIndex: linkIndex,
 			Table:     routeTable,
-			Gw:        defaultGw,
+			Gw:        gw,
 		})
 	}
 	return filtered
@@ -882,6 +885,31 @@ func hasRouteForDst(routes []netlink.Route, dst *net.IPNet) bool {
 		}
 	}
 	return false
+}
+
+// findBestGateway returns the gateway from the most specific route in routes
+// that contains dst. For example, if routes has 192.168.250.0/24 via 192.168.150.1
+// and dst is 192.168.250.100/32, it returns 192.168.150.1. Falls back to defaultGw
+// if no containing route is found.
+func findBestGateway(routes []netlink.Route, dst *net.IPNet, defaultGw net.IP) net.IP {
+	var bestOnes int = -1
+	var bestGw net.IP
+	for _, r := range routes {
+		if r.Dst == nil {
+			continue
+		}
+		if r.Dst.Contains(dst.IP) {
+			ones, _ := r.Dst.Mask.Size()
+			if ones > bestOnes {
+				bestOnes = ones
+				bestGw = r.Gw
+			}
+		}
+	}
+	if bestGw != nil {
+		return bestGw
+	}
+	return defaultGw
 }
 
 func (c *Controller) deleteRefObjects(name string) {

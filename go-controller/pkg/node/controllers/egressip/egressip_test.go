@@ -1324,6 +1324,27 @@ var _ = ginkgo.Describe("EgressIPTraffic helper functions", func() {
 		})
 	})
 
+	ginkgo.It("inherits gateway from broader route for /32 destinations", func() {
+		linkIndex := 10
+		tableID := util.CalculateRouteTableID(linkIndex)
+		gw := net.ParseIP("192.168.150.1")
+		inputRoutes := []netlink.Route{
+			{Dst: defaultV4AnyCIDR, LinkIndex: linkIndex, Table: tableID},
+			{Dst: mustParseCIDR("192.168.150.0/24"), LinkIndex: linkIndex, Table: tableID, Scope: netlink.SCOPE_LINK},
+			{Dst: mustParseCIDR("192.168.250.0/24"), LinkIndex: linkIndex, Table: tableID, Gw: gw, Type: unix.RTN_UNICAST},
+		}
+		destNetworks := []*net.IPNet{mustParseCIDR("192.168.250.100/32"), mustParseCIDR("192.168.250.200/32")}
+		result := replaceDefaultRouteWithDestNetworks(inputRoutes, linkIndex, destNetworks, false)
+		// Should contain 4 routes: connected + /24 with gw + two /32s with inherited gw
+		gomega.Expect(result).To(gomega.HaveLen(4))
+		for _, r := range result {
+			if r.Dst != nil && (r.Dst.String() == "192.168.250.100/32" || r.Dst.String() == "192.168.250.200/32") {
+				gomega.Expect(r.Gw).NotTo(gomega.BeNil(), "/32 route should have inherited gateway")
+				gomega.Expect(r.Gw.Equal(gw)).To(gomega.BeTrue(), "/32 route should inherit gateway from /24 route, got %v", r.Gw)
+			}
+		}
+	})
+
 	ginkgo.Context("hasRouteForDst", func() {
 		ginkgo.It("finds matching destination CIDR", func() {
 			routes := []netlink.Route{
@@ -1348,6 +1369,55 @@ var _ = ginkgo.Describe("EgressIPTraffic helper functions", func() {
 
 		ginkgo.It("returns false for empty routes", func() {
 			gomega.Expect(hasRouteForDst(nil, mustParseCIDR("192.168.250.0/24"))).To(gomega.BeFalse())
+		})
+	})
+
+	ginkgo.Context("findBestGateway", func() {
+		ginkgo.It("returns gateway from broader route covering the destination", func() {
+			gw := net.ParseIP("192.168.150.1")
+			routes := []netlink.Route{
+				{Dst: mustParseCIDR("192.168.250.0/24"), Gw: gw, LinkIndex: 10, Table: 1010},
+				{Dst: mustParseCIDR("192.168.150.0/24"), LinkIndex: 10, Table: 1010},
+			}
+			result := findBestGateway(routes, mustParseCIDR("192.168.250.100/32"), nil)
+			gomega.Expect(result.Equal(gw)).To(gomega.BeTrue(), "should inherit gateway from /24 route")
+		})
+
+		ginkgo.It("returns most specific broader route gateway", func() {
+			gw16 := net.ParseIP("10.0.0.1")
+			gw24 := net.ParseIP("10.0.1.1")
+			routes := []netlink.Route{
+				{Dst: mustParseCIDR("10.0.0.0/16"), Gw: gw16, LinkIndex: 10, Table: 1010},
+				{Dst: mustParseCIDR("10.0.1.0/24"), Gw: gw24, LinkIndex: 10, Table: 1010},
+			}
+			result := findBestGateway(routes, mustParseCIDR("10.0.1.50/32"), nil)
+			gomega.Expect(result.Equal(gw24)).To(gomega.BeTrue(), "should prefer /24 over /16")
+		})
+
+		ginkgo.It("falls back to defaultGw when no broader route exists", func() {
+			defaultGw := net.ParseIP("192.168.150.254")
+			routes := []netlink.Route{
+				{Dst: mustParseCIDR("192.168.250.0/24"), LinkIndex: 10, Table: 1010},
+			}
+			result := findBestGateway(routes, mustParseCIDR("10.99.0.0/24"), defaultGw)
+			gomega.Expect(result.Equal(defaultGw)).To(gomega.BeTrue(), "should fall back to default gateway")
+		})
+
+		ginkgo.It("returns nil when no broader route and no default gateway", func() {
+			routes := []netlink.Route{
+				{Dst: mustParseCIDR("192.168.250.0/24"), LinkIndex: 10, Table: 1010},
+			}
+			result := findBestGateway(routes, mustParseCIDR("10.99.0.0/24"), nil)
+			gomega.Expect(result).To(gomega.BeNil())
+		})
+
+		ginkgo.It("returns nil when broader route has no gateway", func() {
+			routes := []netlink.Route{
+				{Dst: mustParseCIDR("192.168.250.0/24"), LinkIndex: 10, Table: 1010},
+			}
+			result := findBestGateway(routes, mustParseCIDR("192.168.250.100/32"), net.ParseIP("1.2.3.4"))
+			// Broader route has no Gw, so falls back to defaultGw
+			gomega.Expect(result.Equal(net.ParseIP("1.2.3.4"))).To(gomega.BeTrue())
 		})
 	})
 
